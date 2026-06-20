@@ -343,6 +343,13 @@ class DesignInputSpecification(BaseModel):
                             source_backed_selections
                         )
                     )
+                if exists(data.get("contig")):
+                    data["contig"] = InputSelection(
+                        raw=data["contig"],
+                        data={},
+                        mask=np.array([], dtype=bool),
+                        tokens={},
+                    )
                 return data
 
             # ... Load atom array from input file if provided
@@ -572,7 +579,7 @@ class DesignInputSpecification(BaseModel):
         # ... Fetch tokens
         indexed_tokens = (
             self.contig.get_tokens(atom_array_input_annotated)
-            if exists(self.contig)
+            if exists(self.contig) and exists(atom_array_input_annotated)
             else {}
         )
         unindexed_tokens = (
