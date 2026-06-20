@@ -119,12 +119,17 @@ class RFD3Output:
     ):
         base_path = os.path.join(out_dir, self.example_id)
         base_path = Path(base_path).absolute()
+        allow_ambiguous_bond_annotations = (
+            self.metadata.get("coupling", {}).get("output")
+            == "merged_A_plus_all_partners"
+        )
         to_cif_file(
             self.atom_array,
             base_path,
             file_type="cif.gz",
             include_entity_poly=False,
             extra_fields=SAVED_CONDITIONING_ANNOTATIONS,
+            _allow_ambiguous_bond_annotations=allow_ambiguous_bond_annotations,
         )
         if self.metadata:
             with open(f"{base_path}.json", "w") as f:
@@ -139,6 +144,7 @@ class RFD3Output:
                 "_denoised_model_".join([prefix, suffix]),
                 file_type="cif.gz",
                 include_entity_poly=False,
+                _allow_ambiguous_bond_annotations=allow_ambiguous_bond_annotations,
             )
 
         if self.noisy_trajectory_stack is not None:
@@ -147,6 +153,7 @@ class RFD3Output:
                 "_noisy_model_".join([prefix, suffix]),
                 file_type="cif.gz",
                 include_entity_poly=False,
+                _allow_ambiguous_bond_annotations=allow_ambiguous_bond_annotations,
             )
 
         if verbose:
