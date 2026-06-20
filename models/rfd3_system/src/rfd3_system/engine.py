@@ -32,6 +32,7 @@ from rfd3_system.system.chains import (
     append_nonshared_from_track_2,
     assert_matching_shared_chain,
     chain_mask,
+    relabel_nonshared_chains,
     shared_chain_mask,
     subset_by_chains,
 )
@@ -660,28 +661,38 @@ class RFD3InferenceEngine(BaseInferenceEngine):
     ) -> List[RFD3Output]:
         outputs = []
         coupling_metadata = _to_jsonable(network_output["coupling_metadata"])
+        track_2_template = relabel_nonshared_chains(
+            track_2_output["atom_array"],
+            self.shared_chain_id,
+            self.complex_2_partners,
+        )
         merged_template = append_nonshared_from_track_2(
             track_1_output["atom_array"],
-            track_2_output["atom_array"],
+            track_2_template,
             self.shared_chain_id,
         )
 
         for idx in range(len(track_1_arrays)):
+            track_2_array = relabel_nonshared_chains(
+                track_2_arrays[idx],
+                self.shared_chain_id,
+                self.complex_2_partners,
+            )
             denoised_1, noisy_1 = self._trajectory_stacks(
                 network_output["track_1"], track_1_output["atom_array"], idx
             )
             denoised_2, noisy_2 = self._trajectory_stacks(
-                network_output["track_2"], track_2_output["atom_array"], idx
+                network_output["track_2"], track_2_template, idx
             )
             merged_array = append_nonshared_from_track_2(
-                track_1_arrays[idx], track_2_arrays[idx], self.shared_chain_id
+                track_1_arrays[idx], track_2_array, self.shared_chain_id
             )
             denoised_merged = None
             noisy_merged = None
             if self.dump_trajectories:
                 merged_network_output = self._merged_network_output(
                     network_output,
-                    track_2_output["atom_array"],
+                    track_2_template,
                 )
                 denoised_merged, noisy_merged = self._trajectory_stacks(
                     merged_network_output, merged_template, idx
@@ -710,7 +721,7 @@ class RFD3InferenceEngine(BaseInferenceEngine):
                     ),
                     RFD3Output(
                         example_id=f"{example_id}_track2_model_{idx}",
-                        atom_array=track_2_arrays[idx],
+                        atom_array=track_2_array,
                         metadata=metadata_2,
                         denoised_trajectory_stack=denoised_2,
                         noisy_trajectory_stack=noisy_2,

@@ -37,6 +37,18 @@ def subset_by_chains(atom_array: AtomArray, chain_ids: Sequence[str]) -> AtomArr
     return subset
 
 
+def ordered_chain_ids(atom_array: AtomArray) -> list[str]:
+    """Return chain IDs in first-appearance order."""
+
+    ordered = []
+    seen = set()
+    for chain_id in atom_array.chain_id.astype(str):
+        if chain_id not in seen:
+            ordered.append(chain_id)
+            seen.add(chain_id)
+    return ordered
+
+
 def shared_chain_mask(atom_array: AtomArray, shared_chain_id: str) -> np.ndarray:
     """Return and validate the atom mask for the shared chain."""
 
@@ -77,6 +89,86 @@ def assert_matching_shared_chain(
             "Shared-chain atom order differs between tracks. The approximate "
             "coupler requires identical shared-chain residue/atom ordering."
         )
+
+
+def relabel_nonshared_chains(
+    atom_array: AtomArray,
+    shared_chain_id: str,
+    partner_chain_ids: Sequence[str],
+) -> AtomArray:
+    """Relabel non-shared chains to the user-facing partner chain IDs.
+
+    RFD3's normal per-complex pipeline may compact a two-chain view to A/B even
+    when the original global source chains were A/C. Coupled output formatting
+    needs to restore those global chain labels so track 2 is written as A+C and
+    the merged output is written as A+B+C.
+    """
+
+    desired_chain_ids = normalize_chain_ids(partner_chain_ids)
+    if shared_chain_id in desired_chain_ids:
+        raise ValueError("Partner chain IDs must not include the shared chain.")
+
+    relabeled = atom_array.copy()
+    actual_chain_ids = [
+        chain_id
+        for chain_id in ordered_chain_ids(relabeled)
+        if chain_id != shared_chain_id
+    ]
+    if len(actual_chain_ids) != len(desired_chain_ids):
+        raise ValueError(
+            "Cannot relabel non-shared chains: expected "
+            f"{len(desired_chain_ids)} partner chain(s) {desired_chain_ids}, "
+            f"but found {len(actual_chain_ids)} chain(s) {actual_chain_ids}."
+        )
+
+    for actual_chain_id, desired_chain_id in zip(actual_chain_ids, desired_chain_ids):
+        mask = relabeled.chain_id == actual_chain_id
+        relabeled.chain_id[mask] = desired_chain_id
+        _relabel_string_annotation(
+            relabeled,
+            "chain_iid",
+            mask,
+            actual_chain_id,
+            desired_chain_id,
+        )
+        _relabel_string_annotation(
+            relabeled,
+            "pn_unit_id",
+            mask,
+            actual_chain_id,
+            desired_chain_id,
+        )
+        _relabel_string_annotation(
+            relabeled,
+            "pn_unit_iid",
+            mask,
+            actual_chain_id,
+            desired_chain_id,
+        )
+    return relabeled
+
+
+def _relabel_string_annotation(
+    atom_array: AtomArray,
+    annotation_name: str,
+    mask: np.ndarray,
+    actual_chain_id: str,
+    desired_chain_id: str,
+) -> None:
+    """Relabel a chain-like string annotation if the AtomArray has it."""
+
+    if annotation_name not in atom_array.get_annotation_categories():
+        return
+    values = atom_array.get_annotation(annotation_name).astype(str)
+    updated = values.copy()
+    suffix_prefix = f"{actual_chain_id}_"
+    for value in np.unique(values[mask]):
+        value_mask = mask & (values == value)
+        if value == actual_chain_id:
+            updated[value_mask] = desired_chain_id
+        elif value.startswith(suffix_prefix):
+            updated[value_mask] = f"{desired_chain_id}_{value[len(suffix_prefix):]}"
+    atom_array.set_annotation(annotation_name, updated)
 
 
 def append_nonshared_from_track_2(
