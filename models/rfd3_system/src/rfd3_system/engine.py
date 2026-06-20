@@ -464,7 +464,7 @@ class RFD3InferenceEngine(BaseInferenceEngine):
             shared_mask_1 = torch.as_tensor(shared_mask_1_np, dtype=torch.bool, device=device)
             shared_mask_2 = torch.as_tensor(shared_mask_2_np, dtype=torch.bool, device=device)
 
-            model = self.trainer.state["model"]
+            model = self._get_forward_coupled_model(self.trainer.state["model"])
             network_output = model.forward_coupled(
                 track_1_input={"f": track_1_device["feats"]},
                 track_2_input={"f": track_2_device["feats"]},
@@ -500,6 +500,26 @@ class RFD3InferenceEngine(BaseInferenceEngine):
             f"Finished coupled inference batch in {time.time() - t0:.2f} seconds."
         )
         return outputs
+
+    @staticmethod
+    def _get_forward_coupled_model(model):
+        """Return the module that owns `forward_coupled`.
+
+        Foundry checkpoints may wrap RFD3 in the shared EMA module. During
+        inference the EMA wrapper's `forward()` dispatches to `shadow`, so the
+        coupled path should call `shadow.forward_coupled()` when present.
+        """
+
+        if hasattr(model, "forward_coupled"):
+            return model
+        for attr in ("shadow", "model"):
+            wrapped = getattr(model, attr, None)
+            if wrapped is not None and hasattr(wrapped, "forward_coupled"):
+                return wrapped
+        raise AttributeError(
+            "Loaded model does not expose forward_coupled directly or through "
+            "an EMA shadow/model wrapper."
+        )
 
     def _ensure_design_spec(self, spec: dict | DesignInputSpecification):
         if isinstance(spec, DesignInputSpecification):
