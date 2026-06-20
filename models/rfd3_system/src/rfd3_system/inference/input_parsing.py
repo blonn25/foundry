@@ -353,7 +353,7 @@ class DesignInputSpecification(BaseModel):
                 return data
 
             # ... Load atom array from input file if provided
-            if exists(data["input"]):
+            if exists(data.get("input")):
                 if exists(data.get("atom_array_input")):
                     raise ValueError(
                         "Both 'input' and 'atom_array_input' provided; please provide only one."
