@@ -18,6 +18,11 @@ derivation. The implemented mode therefore uses RFD3 denoiser deltas as
 score-like update proxies and records this approximation in output metadata.
 See [`docs/superdiff_shared_chain.md`](./docs/superdiff_shared_chain.md).
 
+For A+B/A+C coupled runs, the engine writes separate track 1, track 2, and
+merged outputs. Track 2 partner chains are relabeled back to the user-facing
+global partner IDs during output formatting, so a source A+B+C design is dumped
+as A+B, A+C, and merged A+B+C rather than two independent A+B views.
+
 During development, run this copy explicitly without modifying the root
 Foundry package metadata:
 

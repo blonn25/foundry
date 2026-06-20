@@ -84,8 +84,10 @@ score-like update proxy for the shared chain A:
    the proxy system is degenerate.
 8. Update A with the weighted proxy update, while updating B and C with their
    normal per-track updates.
-9. Write A+B, A+C, merged A+B+C, trajectory outputs, and metadata containing
-   all weights, residuals, norms, and approximation warnings.
+9. Relabel track 2's non-shared partner chains back to the user-facing global
+   chain IDs before output formatting.
+10. Write A+B, A+C, merged A+B+C, trajectory outputs, and metadata containing
+    all weights, residuals, norms, and approximation warnings.
 
 The proxy solve lives in `src/rfd3_system/system/proxy.py`. Given two shared-A
 update proxies `delta_1` and `delta_2`, it defines:
@@ -134,7 +136,7 @@ copy:
 - `src/rfd3_system/system/proxy.py` contains the approximate two-track proxy
   solve and its diagnostics dataclass.
 - `src/rfd3_system/system/chains.py` contains chain splitting, shared-chain
-  validation, and merged-output helpers.
+  validation, track-2 partner relabeling, and merged-output helpers.
 - `src/rfd3_system/model/inference_sampler.py` registers
   `SampleDiffusionWithSuperDiffSharedChainProxy` behind
   `inference_sampler.kind=superdiff_shared_chain`.
@@ -194,6 +196,14 @@ track-specific sequence-head outputs, but this prototype only couples
 coordinate updates for the shared chain.  The merged A+B+C output therefore
 uses chain A from track 1 and records this policy in metadata.
 
+RFD3's normal per-complex formatting can compact a split two-chain view to
+A+B, even when the source global chains were A+C.  The coupled engine therefore
+relabels track 2's non-shared output chains to `complex_2_partners` immediately
+before building `RFD3Output` objects.  This is an output-annotation step only:
+it does not change the sampled coordinate tensors or denoising behavior.  It is
+needed so the final files preserve the intended A+B, A+C, and merged A+B+C
+chain organization.
+
 The mode rejects classifier-free guidance, symmetry, motif realignment, and
 `s_jitter_origin`.  These features alter the effective denoiser query, coordinate
 frame, or update semantics and would need their own coupled derivation before
@@ -211,9 +221,27 @@ non-shared partner coordinates to track 1's coordinate order.
 
 Local lightweight validation has covered syntax parsing for the copied
 `rfd3_system` Python tree and direct assertions for the proxy-weight solver.
-Full RFD3 inference has not yet been smoke-tested on CoreHPC for this coupled
-mode.  The next validation step is the prepared A90/B80/C100 de novo GPU SLURM
-run with outputs directed outside the software clone.
+
+CoreHPC GPU job `703094` completed successfully for the prepared A90/B80/C100
+de novo coupled run using the default RFD3 denoising step configuration. The
+outputs are under:
+
+```text
+outputs/foundry/rfd3_system/a90_b80_c100_default_steps_703094/
+```
+
+Validation of the final CIF outputs found three generated models with:
+
+- track 1 residue counts: A=90, B=80;
+- track 2 residue counts: A=90, C=100;
+- merged residue counts: A=90, B=80, C=100;
+- shared-chain A coordinates exactly matching between track 1 and track 2 for
+  all three final models.
+
+The output metadata records `superdiff_exact: false`,
+`coupling_mode: superdiff_shared_chain`, the A/B/C partner configuration, and
+per-step proxy diagnostics including weights, residuals, norms, and degenerate
+flags.
 
 The prepared A90/B80/C100 de novo test uses the default RFD3 denoising step
 count and can be submitted from the project root with:
