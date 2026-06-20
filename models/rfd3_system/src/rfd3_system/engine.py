@@ -12,6 +12,7 @@ import torch
 import yaml
 from atomworks.io.utils.io_utils import to_cif_file
 from biotite.structure import AtomArray, AtomArrayStack
+from omegaconf import DictConfig, ListConfig
 from toolz import merge_with
 
 from foundry.common import exists
@@ -232,6 +233,31 @@ class RFD3InferenceEngine(BaseInferenceEngine):
             ranked_logger.info("Low memory mode enabled.")
             # HACK: Set attribute to the diffusion module
             os.environ["RFD3_LOW_MEMORY_MODE"] = "1"
+
+    def _override_checkpoint_config(self, cfg):
+        """Load the RFD3 checkpoint config through the rfd3_system package.
+
+        The public RFD3 checkpoint stores Hydra targets under the original
+        `rfd3.*` package. This research copy must instantiate local
+        `rfd3_system.*` classes so the coupled sampler registry and engine
+        extensions are available while reusing the same checkpoint weights.
+        """
+
+        cfg = super()._override_checkpoint_config(cfg)
+        self._rewrite_rfd3_targets_to_system(cfg)
+        return cfg
+
+    def _rewrite_rfd3_targets_to_system(self, node) -> None:
+        if isinstance(node, DictConfig):
+            if "_target_" in node and isinstance(node["_target_"], str):
+                target = node["_target_"]
+                if target.startswith("rfd3."):
+                    node["_target_"] = "rfd3_system." + target[len("rfd3.") :]
+            for value in node.values():
+                self._rewrite_rfd3_targets_to_system(value)
+        elif isinstance(node, ListConfig):
+            for value in node:
+                self._rewrite_rfd3_targets_to_system(value)
 
     def run(
         self,
