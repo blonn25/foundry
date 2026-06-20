@@ -89,4 +89,9 @@ def append_nonshared_from_track_2(
     nonshared_2 = track_2_atom_array[~shared_chain_mask(track_2_atom_array, shared_chain_id)]
     merged = track_1_atom_array.copy() + nonshared_2.copy()
     merged.bonds = None
+    if "atom_id" in merged.get_annotation_categories():
+        # The two track outputs are built independently, so their atom_id
+        # annotations can collide after concatenation even when chain IDs differ.
+        # Dropping atom_id lets the CIF writer assign unambiguous identifiers.
+        merged.del_annotation("atom_id")
     return merged
