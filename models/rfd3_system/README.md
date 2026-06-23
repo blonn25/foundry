@@ -24,6 +24,8 @@ therefore uses RFD3 denoiser deltas as score-like update proxies and records
 
 Detailed implementation notes, assumptions, limitations, and validation results
 are in [docs/superdiff_shared_chain.md](docs/superdiff_shared_chain.md).
+The update-proxy, kappa, and residual equations are summarized in
+[docs/shared_chain_coupling_math.md](docs/shared_chain_coupling_math.md).
 
 ## Active Layout
 
@@ -32,6 +34,7 @@ src/rfd3_system/                         Python package for the research copy
 configs/                                 Hydra configs used by inference/checkpoint loading
 tests/                                   Unit and regression tests for the copied package
 docs/superdiff_shared_chain.md           Prototype design and validation notes
+docs/shared_chain_coupling_math.md       Coupling equations and diagnostics
 docs/examples/superdiff_shared_chain_proxy.yaml
                                           Minimal example override shape
 archived/                                Upstream RFD3 docs/assets kept for reference only

@@ -135,6 +135,10 @@ The y-axis is the kappa weight in
 `delta_mix = kappa * delta(track 1) + (1-kappa) * delta(track 2)`, with labels
 showing whether the mixed update is leaning toward track 1 or track 2.
 
+For the derivation of `kappa_raw`, the proxy residual, and the relationship
+between RFD3 denoiser deltas and EDM-style scores, see
+[`shared_chain_coupling_math.md`](./shared_chain_coupling_math.md).
+
 ## Implementation Map
 
 The implementation is intentionally localized to this `rfd3_system` research
