@@ -465,8 +465,9 @@ Future coupled merged outputs include a batch-level SVG plot:
 *_merged_kappa.svg
 ```
 
-The x-axis is ordered from noisy denoising steps on the left to steps closer to
-the final denoised structure on the right. The y-axis is `kappa` in:
+The x-axis tick labels are numeric `t_hat` noise-level values. They are ordered
+from larger/noisier values on the left to smaller values closer to the final
+denoised structure on the right. The y-axis is `kappa` in:
 
 ```text
 delta_mix = kappa * delta(track 1) + (1 - kappa) * delta(track 2)

@@ -69,7 +69,7 @@ sbatch jobs/rfd3_system_a90_b80_c100_smoke.sbatch
 The prepared A90/B80/C100 test writes outputs under:
 
 ```text
-outputs/foundry/rfd3_system/a90_b80_c100_default_steps_<jobid>/
+outputs/foundry/rfd3_system/a90_b80_c100_default_steps_n5_<jobid>/
 ```
 
 The helper script sets `global_prefix=rfd3sys_a90_b80_c100`, so new output
@@ -91,6 +91,10 @@ For A+B/A+C coupled runs, the engine writes:
 - optional track-specific and merged trajectory files;
 - one merged-output kappa trajectory plot per diffusion batch;
 - metadata with coupling settings and per-step proxy diagnostics.
+
+The kappa SVG uses numeric `t_hat` noise-level values along the x-axis. These
+values decrease from left to right as the trajectory moves from noisy states
+toward the final denoised structure.
 
 RFD3's normal per-complex formatting can compact a split two-chain view to A+B,
 even when the original global source chains were A+C. `rfd3_system` relabels

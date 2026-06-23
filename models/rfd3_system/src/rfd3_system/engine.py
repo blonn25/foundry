@@ -985,6 +985,7 @@ def _maybe_dump_kappa_plot(metadata: dict, base_path: Path) -> None:
         _write_kappa_svg(
             plot_path=plot_path,
             kappa=kappa,
+            t_hat=diagnostics.get("t_hat"),
             track_1_label=track_1_label,
             track_2_label=track_2_label,
             kappa_min=float(coupling.get("proxy_kappa_min", -1.0)),
@@ -999,6 +1000,7 @@ def _write_kappa_svg(
     *,
     plot_path: str,
     kappa: np.ndarray,
+    t_hat,
     track_1_label: str,
     track_2_label: str,
     kappa_min: float,
@@ -1014,6 +1016,7 @@ def _write_kappa_svg(
     finite = kappa[np.isfinite(kappa)]
     if finite.size == 0:
         raise ValueError("kappa diagnostics do not contain finite values.")
+    t_hat_values = _coerce_t_hat_values(t_hat, kappa.shape[0])
     y_min = min(float(np.min(finite)), kappa_min, 0.0, 0.5, 1.0)
     y_max = max(float(np.max(finite)), kappa_max, 0.0, 0.5, 1.0)
     y_pad = max((y_max - y_min) * 0.05, 0.05)
@@ -1067,13 +1070,15 @@ def _write_kappa_svg(
             f'<text x="{left - 10}" y="{y + 4:.2f}" text-anchor="end" font-size="12" font-family="Arial">{tick:.2f}</text>'
         )
 
-    for frac, label in [(0.0, "high noise"), (0.5, "denoising step"), (1.0, "near final")]:
-        x = left + plot_width * frac
+    tick_indices = _plot_tick_indices(kappa.shape[0], max_ticks=6)
+    for step_idx in tick_indices:
+        x = x_to_px(step_idx)
+        label = _format_t_hat_label(t_hat_values[step_idx])
         elements.append(
             f'<line x1="{x:.2f}" y1="{top + plot_height}" x2="{x:.2f}" y2="{top + plot_height + 5}" stroke="#333"/>'
         )
         elements.append(
-            f'<text x="{x:.2f}" y="{top + plot_height + 25}" text-anchor="middle" font-size="12" font-family="Arial">{label}</text>'
+            f'<text x="{x:.2f}" y="{top + plot_height + 25}" text-anchor="middle" font-size="12" font-family="Arial">{escape(label)}</text>'
         )
 
     for sample_idx in range(kappa.shape[1]):
@@ -1098,6 +1103,7 @@ def _write_kappa_svg(
     elements.extend(
         [
             f'<text x="{left + plot_width / 2}" y="{height - 22}" text-anchor="middle" font-size="14" font-family="Arial">Denoising step ordered left-to-right from noisy to near-denoised</text>',
+            f'<text x="{left + plot_width / 2}" y="{height - 42}" text-anchor="middle" font-size="13" font-family="Arial">x-axis tick labels are t_hat noise levels; values decrease during denoising</text>',
             f'<text x="24" y="{top + plot_height / 2}" text-anchor="middle" font-size="14" font-family="Arial" transform="rotate(-90 24 {top + plot_height / 2})">kappa in delta_mix = kappa*delta(track 1) + (1-kappa)*delta(track 2)</text>',
             f'<text x="{left + plot_width + 15}" y="{top + 45}" font-size="14" font-family="Arial" font-weight="bold">Interpretation</text>',
             f'<text x="{left + plot_width + 15}" y="{top + 68}" font-size="13" font-family="Arial">kappa &gt; 0.5 leans toward track 1: {escape(track_1_label)}</text>',
@@ -1107,6 +1113,38 @@ def _write_kappa_svg(
     )
     with open(plot_path, "w") as handle:
         handle.write("\n".join(elements))
+
+
+def _coerce_t_hat_values(t_hat, n_steps: int) -> np.ndarray:
+    """Return one numeric t_hat value per kappa step for plot tick labels."""
+
+    if t_hat is None:
+        return np.arange(n_steps, dtype=float)
+    values = np.asarray(t_hat, dtype=float).reshape(-1)
+    if values.size != n_steps:
+        ranked_logger.warning(
+            "Kappa plot received %s t_hat values for %s steps; using step indices.",
+            values.size,
+            n_steps,
+        )
+        return np.arange(n_steps, dtype=float)
+    return values
+
+
+def _plot_tick_indices(n_steps: int, max_ticks: int) -> np.ndarray:
+    """Choose unique integer x tick indices spanning the denoising trajectory."""
+
+    if n_steps <= max_ticks:
+        return np.arange(n_steps, dtype=int)
+    return np.unique(np.linspace(0, n_steps - 1, max_ticks).round().astype(int))
+
+
+def _format_t_hat_label(value: float) -> str:
+    """Format a t_hat tick label compactly while keeping numeric values visible."""
+
+    if abs(value) >= 100 or abs(value) < 0.01:
+        return f"{value:.2e}"
+    return f"{value:.3g}"
 
 
 def _complex_label(shared_chain_id: str, partner_chain_ids: list[str]) -> str:

@@ -857,6 +857,7 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
             for key in proxy_diag:
                 proxy_diag[key].append(getattr(diag, key).detach().cpu())
 
+        proxy_diag["t_hat"] = [t_hat.detach().cpu() for t_hat in t_hats]
         metadata = {
             **coupling_metadata,
             "approximation": (

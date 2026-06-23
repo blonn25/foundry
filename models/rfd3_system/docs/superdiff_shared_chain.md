@@ -129,9 +129,10 @@ The engine implementation lives in `src/rfd3_system/engine.py`. It:
 Output metadata records `superdiff_exact: false`, the coupling configuration,
 the sequence policy, proxy weights, residuals, norms, and degenerate-step flags.
 For each merged-output batch, the engine also writes one
-`*_merged_kappa.svg` plot. The x-axis is ordered from high-noise denoising
-steps on the left to steps closer to the final denoised structure on the right.
-The y-axis is the kappa weight in
+`*_merged_kappa.svg` plot. The x-axis tick labels are numeric `t_hat`
+noise-level values, ordered from larger/noisier values on the left to smaller
+values closer to the final denoised structure on the right. The y-axis is the
+kappa weight in
 `delta_mix = kappa * delta(track 1) + (1-kappa) * delta(track 2)`, with labels
 showing whether the mixed update is leaning toward track 1 or track 2.
 
