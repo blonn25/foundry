@@ -86,8 +86,9 @@ score-like update proxy for the shared chain A:
    normal per-track updates.
 9. Relabel track 2's non-shared partner chains back to the user-facing global
    chain IDs before output formatting.
-10. Write A+B, A+C, merged A+B+C, trajectory outputs, and metadata containing
-    all weights, residuals, norms, and approximation warnings.
+10. Write A+B, A+C, merged A+B+C, trajectory outputs, a kappa trajectory plot,
+    and metadata containing all weights, residuals, norms, and approximation
+    warnings.
 
 The proxy solve lives in `src/rfd3_system/system/proxy.py`. Given two shared-A
 update proxies `delta_1` and `delta_2`, it defines:
@@ -127,6 +128,12 @@ The engine implementation lives in `src/rfd3_system/engine.py`. It:
 
 Output metadata records `superdiff_exact: false`, the coupling configuration,
 the sequence policy, proxy weights, residuals, norms, and degenerate-step flags.
+For each merged-output batch, the engine also writes one
+`*_merged_kappa.svg` plot. The x-axis is ordered from high-noise denoising
+steps on the left to steps closer to the final denoised structure on the right.
+The y-axis is the kappa weight in
+`delta_mix = kappa * delta(track 1) + (1-kappa) * delta(track 2)`, with labels
+showing whether the mixed update is leaning toward track 1 or track 2.
 
 ## Implementation Map
 

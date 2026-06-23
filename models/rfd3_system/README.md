@@ -75,6 +75,7 @@ files start with names such as:
 ```text
 rfd3sys_a90_b80_c100_0_track1_model_0.cif.gz
 rfd3sys_a90_b80_c100_0_merged_denoised_model_0.cif.gz
+rfd3sys_a90_b80_c100_0_merged_kappa.svg
 ```
 
 ## Output Behavior
@@ -85,6 +86,7 @@ For A+B/A+C coupled runs, the engine writes:
 - track 2 outputs containing A+C;
 - merged outputs containing A+B+C;
 - optional track-specific and merged trajectory files;
+- one merged-output kappa trajectory plot per diffusion batch;
 - metadata with coupling settings and per-step proxy diagnostics.
 
 RFD3's normal per-complex formatting can compact a split two-chain view to A+B,

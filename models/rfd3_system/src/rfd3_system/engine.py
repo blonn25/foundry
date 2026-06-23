@@ -3,6 +3,7 @@ import logging
 import os
 import time
 from dataclasses import dataclass, field
+from html import escape
 from os import PathLike
 from pathlib import Path
 from typing import Dict, List, Optional
@@ -135,6 +136,7 @@ class RFD3Output:
         if self.metadata:
             with open(f"{base_path}.json", "w") as f:
                 json.dump(self.metadata, f, indent=4)
+        _maybe_dump_kappa_plot(self.metadata, base_path)
 
         # Trajectory saving
         denoised_base_path, noisy_base_path = _trajectory_output_paths(base_path)
@@ -934,6 +936,184 @@ def _trajectory_output_paths(base_path: Path) -> tuple[str, str]:
         f"{prefix}_denoised_model_{suffix}",
         f"{prefix}_noisy_model_{suffix}",
     )
+
+
+def _maybe_dump_kappa_plot(metadata: dict, base_path: Path) -> None:
+    """Write one kappa trajectory plot for a coupled merged-output batch."""
+
+    coupling = metadata.get("coupling", {})
+    if coupling.get("output") != "merged_A_plus_all_partners":
+        return
+
+    # The coupling diagnostics are batch-level.  Only write the plot for
+    # model_0 so diffusion batches do not produce duplicate kappa plots.
+    stem = str(base_path)
+    marker = "_model_"
+    if marker in stem:
+        prefix, suffix = stem.rsplit(marker, 1)
+        if suffix != "0":
+            return
+        plot_path = f"{prefix}_kappa.png"
+    else:
+        plot_path = f"{stem}_kappa.png"
+
+    diagnostics = coupling.get("diagnostics", {})
+    if "kappa" not in diagnostics:
+        return
+
+    try:
+        kappa = np.asarray(diagnostics["kappa"], dtype=float)
+        if kappa.ndim == 1:
+            kappa = kappa[:, None]
+        if kappa.ndim != 2 or kappa.shape[0] == 0:
+            ranked_logger.warning(
+                f"Skipping kappa plot; unexpected kappa shape {kappa.shape}."
+            )
+            return
+
+        shared = str(coupling.get("shared_chain_id", "A"))
+        track_1_label = _complex_label(
+            shared,
+            coupling.get("complex_1_partners", ["B"]),
+        )
+        track_2_label = _complex_label(
+            shared,
+            coupling.get("complex_2_partners", ["C"]),
+        )
+
+        plot_path = plot_path.removesuffix(".png") + ".svg"
+        _write_kappa_svg(
+            plot_path=plot_path,
+            kappa=kappa,
+            track_1_label=track_1_label,
+            track_2_label=track_2_label,
+            kappa_min=float(coupling.get("proxy_kappa_min", -1.0)),
+            kappa_max=float(coupling.get("proxy_kappa_max", 2.0)),
+        )
+        ranked_logger.info(f"Kappa trajectory plot written to {plot_path}.")
+    except Exception as exc:
+        ranked_logger.warning(f"Skipping kappa plot due to plotting error: {exc}")
+
+
+def _write_kappa_svg(
+    *,
+    plot_path: str,
+    kappa: np.ndarray,
+    track_1_label: str,
+    track_2_label: str,
+    kappa_min: float,
+    kappa_max: float,
+) -> None:
+    """Write a dependency-free SVG plot of kappa trajectories."""
+
+    width, height = 1100, 620
+    left, right, top, bottom = 90, 290, 70, 95
+    plot_width = width - left - right
+    plot_height = height - top - bottom
+
+    finite = kappa[np.isfinite(kappa)]
+    if finite.size == 0:
+        raise ValueError("kappa diagnostics do not contain finite values.")
+    y_min = min(float(np.min(finite)), kappa_min, 0.0, 0.5, 1.0)
+    y_max = max(float(np.max(finite)), kappa_max, 0.0, 0.5, 1.0)
+    y_pad = max((y_max - y_min) * 0.05, 0.05)
+    y_min -= y_pad
+    y_max += y_pad
+
+    def x_to_px(step: int) -> float:
+        if kappa.shape[0] == 1:
+            return left
+        return left + plot_width * step / (kappa.shape[0] - 1)
+
+    def y_to_px(value: float) -> float:
+        return top + plot_height * (y_max - value) / (y_max - y_min)
+
+    colors = [
+        "#1f77b4",
+        "#d62728",
+        "#2ca02c",
+        "#9467bd",
+        "#ff7f0e",
+        "#17becf",
+        "#8c564b",
+        "#e377c2",
+    ]
+    elements = [
+        f'<svg xmlns="http://www.w3.org/2000/svg" width="{width}" height="{height}" viewBox="0 0 {width} {height}">',
+        '<rect width="100%" height="100%" fill="white"/>',
+        f'<text x="{width / 2}" y="34" text-anchor="middle" font-size="22" font-family="Arial">Shared-chain coupling weight over denoising</text>',
+        f'<rect x="{left}" y="{top}" width="{plot_width}" height="{plot_height}" fill="#fafafa" stroke="#333" stroke-width="1"/>',
+    ]
+
+    for value, label, dash in [
+        (1.0, f"kappa=1: track 1 ({track_1_label}) only", "3 4"),
+        (0.5, "kappa=0.5: equal mix", "7 5"),
+        (0.0, f"kappa=0: track 2 ({track_2_label}) only", "10 4 2 4"),
+    ]:
+        y = y_to_px(value)
+        elements.append(
+            f'<line x1="{left}" y1="{y:.2f}" x2="{left + plot_width}" y2="{y:.2f}" stroke="#555" stroke-width="1.2" stroke-dasharray="{dash}"/>'
+        )
+        elements.append(
+            f'<text x="{left + plot_width + 15}" y="{y + 4:.2f}" font-size="13" font-family="Arial" fill="#333">{escape(label)}</text>'
+        )
+
+    for tick in np.linspace(y_min, y_max, 7):
+        y = y_to_px(float(tick))
+        elements.append(
+            f'<line x1="{left - 5}" y1="{y:.2f}" x2="{left}" y2="{y:.2f}" stroke="#333"/>'
+        )
+        elements.append(
+            f'<text x="{left - 10}" y="{y + 4:.2f}" text-anchor="end" font-size="12" font-family="Arial">{tick:.2f}</text>'
+        )
+
+    for frac, label in [(0.0, "high noise"), (0.5, "denoising step"), (1.0, "near final")]:
+        x = left + plot_width * frac
+        elements.append(
+            f'<line x1="{x:.2f}" y1="{top + plot_height}" x2="{x:.2f}" y2="{top + plot_height + 5}" stroke="#333"/>'
+        )
+        elements.append(
+            f'<text x="{x:.2f}" y="{top + plot_height + 25}" text-anchor="middle" font-size="12" font-family="Arial">{label}</text>'
+        )
+
+    for sample_idx in range(kappa.shape[1]):
+        points = []
+        for step_idx, value in enumerate(kappa[:, sample_idx]):
+            if np.isfinite(value):
+                points.append(f"{x_to_px(step_idx):.2f},{y_to_px(float(value)):.2f}")
+        if not points:
+            continue
+        color = colors[sample_idx % len(colors)]
+        elements.append(
+            f'<polyline fill="none" stroke="{color}" stroke-width="2" stroke-opacity="0.9" points="{" ".join(points)}"/>'
+        )
+        legend_y = top + 110 + sample_idx * 22
+        elements.append(
+            f'<line x1="{left + plot_width + 15}" y1="{legend_y}" x2="{left + plot_width + 45}" y2="{legend_y}" stroke="{color}" stroke-width="2"/>'
+        )
+        elements.append(
+            f'<text x="{left + plot_width + 52}" y="{legend_y + 4}" font-size="13" font-family="Arial">sample {sample_idx}</text>'
+        )
+
+    elements.extend(
+        [
+            f'<text x="{left + plot_width / 2}" y="{height - 22}" text-anchor="middle" font-size="14" font-family="Arial">Denoising step ordered left-to-right from noisy to near-denoised</text>',
+            f'<text x="24" y="{top + plot_height / 2}" text-anchor="middle" font-size="14" font-family="Arial" transform="rotate(-90 24 {top + plot_height / 2})">kappa in delta_mix = kappa*delta(track 1) + (1-kappa)*delta(track 2)</text>',
+            f'<text x="{left + plot_width + 15}" y="{top + 45}" font-size="14" font-family="Arial" font-weight="bold">Interpretation</text>',
+            f'<text x="{left + plot_width + 15}" y="{top + 68}" font-size="13" font-family="Arial">kappa &gt; 0.5 leans toward track 1: {escape(track_1_label)}</text>',
+            f'<text x="{left + plot_width + 15}" y="{top + 90}" font-size="13" font-family="Arial">kappa &lt; 0.5 leans toward track 2: {escape(track_2_label)}</text>',
+            "</svg>",
+        ]
+    )
+    with open(plot_path, "w") as handle:
+        handle.write("\n".join(elements))
+
+
+def _complex_label(shared_chain_id: str, partner_chain_ids: list[str]) -> str:
+    """Return a compact label such as A+B or A+C for plot annotations."""
+
+    partners = [str(partner) for partner in partner_chain_ids]
+    return "+".join([shared_chain_id] + partners)
 
 
 def process_input(
