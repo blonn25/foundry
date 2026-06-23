@@ -137,12 +137,11 @@ class RFD3Output:
                 json.dump(self.metadata, f, indent=4)
 
         # Trajectory saving
-        prefix = str(base_path)[:-1].rstrip("_model_")
-        suffix = str(base_path)[-1]
+        denoised_base_path, noisy_base_path = _trajectory_output_paths(base_path)
         if self.denoised_trajectory_stack is not None:
             to_cif_file(
                 self.denoised_trajectory_stack,
-                "_denoised_model_".join([prefix, suffix]),
+                denoised_base_path,
                 file_type="cif.gz",
                 include_entity_poly=False,
                 _allow_ambiguous_bond_annotations=allow_ambiguous_bond_annotations,
@@ -151,7 +150,7 @@ class RFD3Output:
         if self.noisy_trajectory_stack is not None:
             to_cif_file(
                 self.noisy_trajectory_stack,
-                "_noisy_model_".join([prefix, suffix]),
+                noisy_base_path,
                 file_type="cif.gz",
                 include_entity_poly=False,
                 _allow_ambiguous_bond_annotations=allow_ambiguous_bond_annotations,
@@ -808,7 +807,8 @@ class RFD3InferenceEngine(BaseInferenceEngine):
         )
         if inputs is None:
             # Create empty specification dictionary
-            return {"": {**self.specification_overrides}}
+            prefix = str(self.global_prefix or "design").rstrip("_") or "design"
+            return {prefix: {**self.specification_overrides}}
         elif is_json_like:
             # List of file paths
             inputs = process_input(
@@ -915,6 +915,25 @@ def _to_jsonable(value):
     if isinstance(value, (np.integer, np.floating)):
         return value.item()
     return value
+
+
+def _trajectory_output_paths(base_path: Path) -> tuple[str, str]:
+    """Build trajectory paths without corrupting names like `merged_model_0`.
+
+    `str.rstrip("_model_")` removes any trailing characters that appear in the
+    argument, so `merged_model_0` can become `merg`. Split on the model marker
+    instead to preserve the full output kind.
+    """
+
+    stem = str(base_path)
+    marker = "_model_"
+    if marker not in stem:
+        return f"{stem}_denoised", f"{stem}_noisy"
+    prefix, suffix = stem.rsplit(marker, 1)
+    return (
+        f"{prefix}_denoised_model_{suffix}",
+        f"{prefix}_noisy_model_{suffix}",
+    )
 
 
 def process_input(
