@@ -102,6 +102,127 @@ sigma ~= t_hat
 This does not make the prototype exact SuperDiff. It only explains why RFD3's
 denoiser-derived `delta` is directly related to an EDM score-like direction.
 
+## Full RFD3 Denoising Step
+
+An RFD3 sampler step is not simply:
+
+```text
+x_next = x + delta
+```
+
+It has a stochastic noise-injection stage followed by a denoiser prediction and
+an Euler-like update. Let:
+
+```text
+X_L        = current coordinate state
+c_prev     = current noise schedule value
+c_next     = next lower noise schedule value
+gamma      = gamma_0 if c_next > gamma_min else 0
+t_hat      = c_prev * (1 + gamma)
+step_scale = RFD3 sampler step scale
+```
+
+RFD3 first optionally increases the noise level from `c_prev` to `t_hat`:
+
+```text
+t_hat = c_prev * (1 + gamma)
+```
+
+It then samples Gaussian noise at the matching variance increment:
+
+```text
+epsilon =
+    noise_scale * sqrt(t_hat^2 - c_prev^2) * N(0, I)
+```
+
+and forms the denoiser query:
+
+```text
+X_noisy = X_L + epsilon
+```
+
+Fixed motif atoms have their noise set to zero. The denoiser predicts:
+
+```text
+X_denoised = D(X_noisy, t_hat)
+```
+
+RFD3 then computes:
+
+```text
+delta = (X_noisy - X_denoised) / t_hat
+d_t   = c_next - t_hat
+```
+
+and updates coordinates with:
+
+```text
+X_next = X_noisy + step_scale * d_t * delta
+```
+
+Since `c_next < t_hat` during normal denoising, `d_t` is negative. This can
+also be read as moving from the noisy query point back toward the denoiser
+prediction:
+
+```text
+X_next =
+    X_noisy
+  + step_scale * (t_hat - c_next) / t_hat * (X_denoised - X_noisy)
+```
+
+Thus each step is:
+
+```text
+current coordinates -> stochastic noisy query -> denoiser prediction -> update toward denoised prediction
+```
+
+## Coupled Shared-Chain Noise Handling
+
+In `rfd3_system`, the shared chain A is presented to both tracks with the same
+instantaneous noisy coordinates. The implementation first makes track 2's
+shared A coordinates match track 1:
+
+```text
+X2_L[A] = X1_L[A]
+```
+
+It then samples independent partner noise for the full track tensors, but
+replaces the shared-chain noise in both tracks with the same Gaussian sample:
+
+```text
+epsilon_shared =
+    noise_scale * sqrt(t_hat^2 - c_prev^2) * N(0, I)
+
+epsilon_1[A] = epsilon_shared
+epsilon_2[A] = epsilon_shared
+```
+
+Fixed shared atoms have their shared noise set to zero, and fixed atoms in each
+track also have their noise set to zero. After this assignment:
+
+```text
+X1_noisy[A] = X1_L[A] + epsilon_shared
+X2_noisy[A] = X2_L[A] + epsilon_shared
+```
+
+Because `X2_L[A]` was overwritten with `X1_L[A]` first, the shared-chain noisy
+states are identical before denoising:
+
+```text
+X1_noisy[A] = X2_noisy[A]
+```
+
+The partner-chain noise remains condition-specific:
+
+```text
+epsilon_1[B] is independent
+epsilon_2[C] is independent
+```
+
+This is intentional. It means the two denoiser calls evaluate the same noisy
+state of A under two different contexts, rather than two unrelated noisy
+realizations of A.
+
 ## Would Dividing by `t_hat` Make `delta` More Score-Like?
 
 A score-like proxy could be formed as:
