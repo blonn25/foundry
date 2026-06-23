@@ -92,9 +92,15 @@ For A+B/A+C coupled runs, the engine writes:
 - one merged-output kappa trajectory plot per diffusion batch;
 - metadata with coupling settings and per-step proxy diagnostics.
 
-The kappa SVG uses numeric `t_hat` noise-level values along the x-axis. These
-values decrease from left to right as the trajectory moves from noisy states
-toward the final denoised structure.
+The kappa SVG uses normalized `t` values along the x-axis. Values increase from
+0 to 1 as the trajectory moves from noisy states toward the final denoised
+structure. The physical RFD3 noise scale `t_hat` is still recorded in the JSON
+diagnostics for runs that need noise-level interpretation.
+
+During coupled inference, the sampler logs periodic progress lines with the
+step count, normalized `t`, `t_hat`, kappa mean/min/max, and mean absolute
+proxy residual. These messages are intended for SLURM log monitoring during
+longer default-step runs.
 
 RFD3's normal per-complex formatting can compact a split two-chain view to A+B,
 even when the original global source chains were A+C. `rfd3_system` relabels

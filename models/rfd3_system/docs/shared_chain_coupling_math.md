@@ -465,9 +465,9 @@ Future coupled merged outputs include a batch-level SVG plot:
 *_merged_kappa.svg
 ```
 
-The x-axis tick labels are numeric `t_hat` noise-level values. They are ordered
-from larger/noisier values on the left to smaller values closer to the final
-denoised structure on the right. The y-axis is `kappa` in:
+The x-axis tick labels are normalized `t` values. They increase from 0 on the
+left to 1 on the right, matching the direction of the denoising process from
+the noisiest state to the final denoised end. The y-axis is `kappa` in:
 
 ```text
 delta_mix = kappa * delta(track 1) + (1 - kappa) * delta(track 2)
@@ -479,6 +479,9 @@ Interpretation:
 - lower `kappa` means it leans more toward track 2;
 - `kappa = 0.5` is an equal mix;
 - values outside `[0, 1]` are extrapolating rather than interpolating.
+
+The physical RFD3 noise scale `t_hat` is still saved in JSON diagnostics for
+analysis, but it is not used as the kappa plot x-axis.
 
 ## Exactness Caveat
 

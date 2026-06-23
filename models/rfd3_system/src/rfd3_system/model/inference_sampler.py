@@ -131,6 +131,22 @@ class SampleDiffusionWithMotif(SampleDiffusionConfig):
 
         return noise_schedule
 
+    def _noise_schedule_to_normalized_t(
+        self,
+        noise_schedule: torch.Tensor,
+    ) -> torch.Tensor:
+        """Invert the AF3/RFD3 noise schedule back to the normalized t value.
+
+        RFD3 stores and passes the physical noise scale `t_hat` to the denoiser,
+        while users usually interpret the schedule by its normalized construction
+        variable `t`.  This helper is only used for diagnostics and plotting.
+        """
+
+        base = torch.clamp(noise_schedule / self.sigma_data, min=0.0)
+        numerator = base ** (1 / self.p) - self.s_max ** (1 / self.p)
+        denominator = self.s_min ** (1 / self.p) - self.s_max ** (1 / self.p)
+        return numerator / denominator
+
     def _get_initial_structure(
         self,
         c0: torch.Tensor,
@@ -710,6 +726,19 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
         noise_schedule = noise_schedule_1
 
         D = diffusion_batch_size
+        n_update_steps = len(noise_schedule) - 1
+        if n_update_steps <= 0:
+            raise ValueError(
+                "Approximate shared-chain coupling requires at least two noise "
+                "schedule values so that one denoising update can be performed."
+            )
+        normalized_t_values = self._noise_schedule_to_normalized_t(noise_schedule)[:-1]
+        progress_interval = max(1, n_update_steps // 20)
+        ranked_logger.info(
+            "Starting rfd3_system shared-chain coupled denoising: "
+            f"{n_update_steps} steps, diffusion_batch_size={D}."
+        )
+
         X1_L = self._get_initial_structure(
             c0=noise_schedule[0],
             D=D,
@@ -822,6 +851,26 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
             kappa_view = diag.kappa.reshape((D, 1, 1))
             delta_A_mix = kappa_view * delta_A_1 + (1 - kappa_view) * delta_A_2
 
+            if (
+                step_num == 0
+                or step_num == n_update_steps - 1
+                or (step_num + 1) % progress_interval == 0
+            ):
+                kappa_values = diag.kappa.detach().cpu()
+                residual_values = diag.proxy_residual.detach().abs().cpu()
+                normalized_t = float(normalized_t_values[step_num].detach().cpu())
+                ranked_logger.info(
+                    "rfd3_system coupled denoising "
+                    f"step {step_num + 1}/{n_update_steps} | "
+                    f"t={normalized_t:.3f} | "
+                    f"t_hat={float(t_hat.detach().cpu()):.4g} | "
+                    "kappa mean/min/max="
+                    f"{float(kappa_values.mean()):.3f}/"
+                    f"{float(kappa_values.min()):.3f}/"
+                    f"{float(kappa_values.max()):.3f} | "
+                    f"mean |proxy_residual|={float(residual_values.mean()):.3e}"
+                )
+
             X1_next = X1_noisy_L + step_scale * d_t * delta_1
             X2_next = X2_noisy_L + step_scale * d_t * delta_2
             shared_next = X1_noisy_L[:, shared_atom_mask_1, :] + (
@@ -858,6 +907,9 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
                 proxy_diag[key].append(getattr(diag, key).detach().cpu())
 
         proxy_diag["t_hat"] = [t_hat.detach().cpu() for t_hat in t_hats]
+        proxy_diag["normalized_t"] = [
+            t_value.detach().cpu() for t_value in normalized_t_values
+        ]
         metadata = {
             **coupling_metadata,
             "approximation": (

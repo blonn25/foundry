@@ -985,7 +985,7 @@ def _maybe_dump_kappa_plot(metadata: dict, base_path: Path) -> None:
         _write_kappa_svg(
             plot_path=plot_path,
             kappa=kappa,
-            t_hat=diagnostics.get("t_hat"),
+            normalized_t=diagnostics.get("normalized_t"),
             track_1_label=track_1_label,
             track_2_label=track_2_label,
             kappa_min=float(coupling.get("proxy_kappa_min", -1.0)),
@@ -1000,7 +1000,7 @@ def _write_kappa_svg(
     *,
     plot_path: str,
     kappa: np.ndarray,
-    t_hat,
+    normalized_t,
     track_1_label: str,
     track_2_label: str,
     kappa_min: float,
@@ -1016,7 +1016,7 @@ def _write_kappa_svg(
     finite = kappa[np.isfinite(kappa)]
     if finite.size == 0:
         raise ValueError("kappa diagnostics do not contain finite values.")
-    t_hat_values = _coerce_t_hat_values(t_hat, kappa.shape[0])
+    normalized_t_values = _coerce_normalized_t_values(normalized_t, kappa.shape[0])
     y_min = min(float(np.min(finite)), kappa_min, 0.0, 0.5, 1.0)
     y_max = max(float(np.max(finite)), kappa_max, 0.0, 0.5, 1.0)
     y_pad = max((y_max - y_min) * 0.05, 0.05)
@@ -1073,7 +1073,7 @@ def _write_kappa_svg(
     tick_indices = _plot_tick_indices(kappa.shape[0], max_ticks=6)
     for step_idx in tick_indices:
         x = x_to_px(step_idx)
-        label = _format_t_hat_label(t_hat_values[step_idx])
+        label = _format_normalized_t_label(normalized_t_values[step_idx])
         elements.append(
             f'<line x1="{x:.2f}" y1="{top + plot_height}" x2="{x:.2f}" y2="{top + plot_height + 5}" stroke="#333"/>'
         )
@@ -1102,8 +1102,8 @@ def _write_kappa_svg(
 
     elements.extend(
         [
-            f'<text x="{left + plot_width / 2}" y="{height - 22}" text-anchor="middle" font-size="14" font-family="Arial">Denoising step ordered left-to-right from noisy to near-denoised</text>',
-            f'<text x="{left + plot_width / 2}" y="{height - 42}" text-anchor="middle" font-size="13" font-family="Arial">x-axis tick labels are t_hat noise levels; values decrease during denoising</text>',
+            f'<text x="{left + plot_width / 2}" y="{height - 22}" text-anchor="middle" font-size="14" font-family="Arial">Normalized denoising progress t (0 = noisiest, 1 = final denoised end)</text>',
+            f'<text x="{left + plot_width / 2}" y="{height - 42}" text-anchor="middle" font-size="13" font-family="Arial">x-axis tick labels are normalized t values; values increase during denoising</text>',
             f'<text x="24" y="{top + plot_height / 2}" text-anchor="middle" font-size="14" font-family="Arial" transform="rotate(-90 24 {top + plot_height / 2})">kappa in delta_mix = kappa*delta(track 1) + (1-kappa)*delta(track 2)</text>',
             f'<text x="{left + plot_width + 15}" y="{top + 45}" font-size="14" font-family="Arial" font-weight="bold">Interpretation</text>',
             f'<text x="{left + plot_width + 15}" y="{top + 68}" font-size="13" font-family="Arial">kappa &gt; 0.5 leans toward track 1: {escape(track_1_label)}</text>',
@@ -1115,20 +1115,29 @@ def _write_kappa_svg(
         handle.write("\n".join(elements))
 
 
-def _coerce_t_hat_values(t_hat, n_steps: int) -> np.ndarray:
-    """Return one numeric t_hat value per kappa step for plot tick labels."""
+def _coerce_normalized_t_values(normalized_t, n_steps: int) -> np.ndarray:
+    """Return one normalized t value per kappa step for plot tick labels."""
 
-    if t_hat is None:
-        return np.arange(n_steps, dtype=float)
-    values = np.asarray(t_hat, dtype=float).reshape(-1)
+    if normalized_t is None:
+        return _fallback_normalized_t_values(n_steps)
+    values = np.asarray(normalized_t, dtype=float).reshape(-1)
     if values.size != n_steps:
         ranked_logger.warning(
-            "Kappa plot received %s t_hat values for %s steps; using step indices.",
+            "Kappa plot received %s normalized t values for %s steps; using "
+            "evenly spaced fallback values.",
             values.size,
             n_steps,
         )
-        return np.arange(n_steps, dtype=float)
+        return _fallback_normalized_t_values(n_steps)
     return values
+
+
+def _fallback_normalized_t_values(n_steps: int) -> np.ndarray:
+    """Construct a 0-to-1 diagnostic t axis when metadata is unavailable."""
+
+    if n_steps <= 1:
+        return np.zeros(n_steps, dtype=float)
+    return np.linspace(0.0, 1.0, n_steps)
 
 
 def _plot_tick_indices(n_steps: int, max_ticks: int) -> np.ndarray:
@@ -1139,12 +1148,14 @@ def _plot_tick_indices(n_steps: int, max_ticks: int) -> np.ndarray:
     return np.unique(np.linspace(0, n_steps - 1, max_ticks).round().astype(int))
 
 
-def _format_t_hat_label(value: float) -> str:
-    """Format a t_hat tick label compactly while keeping numeric values visible."""
+def _format_normalized_t_label(value: float) -> str:
+    """Format normalized t tick labels compactly."""
 
-    if abs(value) >= 100 or abs(value) < 0.01:
-        return f"{value:.2e}"
-    return f"{value:.3g}"
+    if abs(value) < 1e-12:
+        return "0"
+    if abs(value - 1.0) < 1e-12:
+        return "1"
+    return f"{value:.3f}".rstrip("0").rstrip(".")
 
 
 def _complex_label(shared_chain_id: str, partner_chain_ids: list[str]) -> str:

@@ -129,12 +129,12 @@ The engine implementation lives in `src/rfd3_system/engine.py`. It:
 Output metadata records `superdiff_exact: false`, the coupling configuration,
 the sequence policy, proxy weights, residuals, norms, and degenerate-step flags.
 For each merged-output batch, the engine also writes one
-`*_merged_kappa.svg` plot. The x-axis tick labels are numeric `t_hat`
-noise-level values, ordered from larger/noisier values on the left to smaller
-values closer to the final denoised structure on the right. The y-axis is the
-kappa weight in
+`*_merged_kappa.svg` plot. The x-axis tick labels are normalized `t` values,
+ordered from 0 on the noisy left side to 1 at the final denoised end on the
+right. The y-axis is the kappa weight in
 `delta_mix = kappa * delta(track 1) + (1-kappa) * delta(track 2)`, with labels
 showing whether the mixed update is leaning toward track 1 or track 2.
+The physical RFD3 noise scale `t_hat` remains available in JSON diagnostics.
 
 For the derivation of `kappa_raw`, the proxy residual, and the relationship
 between RFD3 denoiser deltas and EDM-style scores, see
