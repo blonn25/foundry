@@ -121,10 +121,15 @@ The engine implementation lives in `src/rfd3_system/engine.py`. It:
   split one source atom array into two track-specific atom arrays;
 - accepts `track_1_specification` and `track_2_specification` overrides so each
   track can define a normal RFD3 contig/selection against its chain-split view;
-- validates that shared-chain atom ordering and initial shared coordinates
-  match between tracks;
-- writes track 1, track 2, and merged outputs;
-- leaves sequence logits uncoupled, with merged A+B+C using chain A from track 1.
+- accepts explicit track-specific A+B and A+C input structures for joint motif
+  scaffolding;
+- validates that non-fixed shared-chain atom ordering and initial shared
+  coordinates match between tracks;
+- excludes fixed shared-chain motif residues from the kappa solve and shared
+  coordinate update;
+- writes track 1, track 2, and optional merged outputs;
+- leaves sequence logits uncoupled, with merged A+B+C controlled by
+  `merged_output_policy`.
 
 Output metadata records `superdiff_exact: false`, the coupling configuration,
 the sequence policy, proxy weights, residuals, norms, and degenerate-step flags.
@@ -148,7 +153,8 @@ copy:
 - `src/rfd3_system/system/proxy.py` contains the approximate two-track proxy
   solve and its diagnostics dataclass.
 - `src/rfd3_system/system/chains.py` contains chain splitting, shared-chain
-  validation, track-2 partner relabeling, and merged-output helpers.
+  validation, fixed-motif-aware shared atom mapping, track-2 partner relabeling,
+  and merged-output helpers.
 - `src/rfd3_system/model/inference_sampler.py` registers
   `SampleDiffusionWithSuperDiffSharedChainProxy` behind
   `inference_sampler.kind=superdiff_shared_chain`.
@@ -156,13 +162,16 @@ copy:
   wrapper that initializes two track views and delegates rollout to the coupled
   sampler.
 - `src/rfd3_system/engine.py` adds `coupling_mode=superdiff_shared_chain`,
-  builds A+B and A+C track specifications from a single ABC input, validates
-  shared-chain consistency, and formats track and merged outputs.
+  builds A+B and A+C track specifications from either a single ABC input or
+  explicit track-specific motif inputs, validates shared-chain consistency, and
+  formats track and merged outputs.
 - `configs/inference_engine/rfdiffusion3.yaml` exposes the coupling mode,
   shared-chain ID, partner-chain IDs, and track-specific specification
   overrides.
 - `docs/examples/superdiff_shared_chain_proxy.yaml` shows the intended CLI
   override shape.
+- `docs/joint_motif_scaffolding.md` documents the track-specific motif
+  scaffolding workflow and selection patterns.
 - `tests/test_superdiff_proxy.py` covers the standalone proxy-weight solver.
 
 ## Key Design Decisions

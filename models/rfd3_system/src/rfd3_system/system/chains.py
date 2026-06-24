@@ -3,9 +3,32 @@
 from __future__ import annotations
 
 from collections.abc import Sequence
+from dataclasses import dataclass
 
 import numpy as np
-from biotite.structure import AtomArray
+from biotite.structure import AtomArray, get_residue_starts
+
+
+@dataclass(frozen=True)
+class SharedAtomMap:
+    """Paired shared-chain atom indices used by the coupled denoising update."""
+
+    update_indices_1: np.ndarray
+    update_indices_2: np.ndarray
+    update_residues: list[dict[str, object]]
+    excluded_fixed_residues: list[dict[str, object]]
+
+    def to_metadata(self) -> dict[str, object]:
+        """Return JSON-friendly shared-map diagnostics for output metadata."""
+
+        return {
+            "shared_update_atom_count": int(self.update_indices_1.size),
+            "shared_update_residue_count": len(self.update_residues),
+            "excluded_fixed_shared_residue_count": len(
+                self.excluded_fixed_residues
+            ),
+            "excluded_fixed_shared_residues": self.excluded_fixed_residues,
+        }
 
 
 def normalize_chain_ids(chain_ids: str | Sequence[str]) -> list[str]:
@@ -89,6 +112,165 @@ def assert_matching_shared_chain(
             "Shared-chain atom order differs between tracks. The approximate "
             "coupler requires identical shared-chain residue/atom ordering."
         )
+
+
+def build_shared_update_atom_map(
+    track_1_atom_array: AtomArray,
+    track_2_atom_array: AtomArray,
+    shared_chain_id: str,
+    fixed_coord_mask_1: np.ndarray,
+    fixed_coord_mask_2: np.ndarray,
+    fixed_seq_mask_1: np.ndarray,
+    fixed_seq_mask_2: np.ndarray,
+) -> SharedAtomMap:
+    """Pair non-fixed shared-chain atoms for coupled denoising.
+
+    Fixed-coordinate shared-chain residues are treated as motif context.  They
+    may differ chemically between tracks, but they are excluded from the
+    stochastic shared update and from the proxy kappa solve.  Non-fixed shared
+    residues must still match exactly, preserving the original all-atom coupling
+    behavior for ordinary generated chain A residues.
+    """
+
+    fixed_coord_mask_1 = np.asarray(fixed_coord_mask_1, dtype=bool)
+    fixed_coord_mask_2 = np.asarray(fixed_coord_mask_2, dtype=bool)
+    fixed_seq_mask_1 = np.asarray(fixed_seq_mask_1, dtype=bool)
+    fixed_seq_mask_2 = np.asarray(fixed_seq_mask_2, dtype=bool)
+    _validate_atom_mask_length(track_1_atom_array, fixed_coord_mask_1, "fixed_coord_mask_1")
+    _validate_atom_mask_length(track_2_atom_array, fixed_coord_mask_2, "fixed_coord_mask_2")
+    _validate_atom_mask_length(track_1_atom_array, fixed_seq_mask_1, "fixed_seq_mask_1")
+    _validate_atom_mask_length(track_2_atom_array, fixed_seq_mask_2, "fixed_seq_mask_2")
+
+    groups_1 = _shared_residue_groups(track_1_atom_array, shared_chain_id)
+    groups_2 = _shared_residue_groups(track_2_atom_array, shared_chain_id)
+    keys_1 = list(groups_1)
+    keys_2 = list(groups_2)
+    if keys_1 != keys_2:
+        raise ValueError(
+            "Shared-chain residue numbering differs between tracks. Track-specific "
+            "A motif inputs must keep chain A residue IDs aligned."
+        )
+
+    update_indices_1 = []
+    update_indices_2 = []
+    update_residues: list[dict[str, object]] = []
+    excluded_fixed_residues: list[dict[str, object]] = []
+
+    for residue_key in keys_1:
+        idx_1 = groups_1[residue_key]
+        idx_2 = groups_2[residue_key]
+        fixed_1 = bool(np.any(fixed_coord_mask_1[idx_1]))
+        fixed_2 = bool(np.any(fixed_coord_mask_2[idx_2]))
+        residue_label = _residue_label(shared_chain_id, residue_key)
+        res_name_1 = str(track_1_atom_array.res_name[idx_1[0]])
+        res_name_2 = str(track_2_atom_array.res_name[idx_2[0]])
+
+        if fixed_1 != fixed_2:
+            raise ValueError(
+                f"Shared-chain residue {residue_label} is fixed in only one "
+                "track. Fixed motif residues on the shared chain must be fixed "
+                "in both tracks or neither track."
+            )
+
+        if fixed_1 and fixed_2:
+            if not np.all(fixed_seq_mask_1[idx_1]) or not np.all(
+                fixed_seq_mask_2[idx_2]
+            ):
+                raise ValueError(
+                    f"Shared-chain fixed motif residue {residue_label} does not "
+                    "have fixed sequence in both tracks. Exclude motif residues "
+                    "from select_unfixed_sequence."
+                )
+            excluded_fixed_residues.append(
+                {
+                    "res_id": int(residue_key),
+                    "track_1_res_name": res_name_1,
+                    "track_2_res_name": res_name_2,
+                    "reason": "fixed_motif_context",
+                }
+            )
+            continue
+
+        signature_1 = _atom_identity_signature(track_1_atom_array, idx_1)
+        signature_2 = _atom_identity_signature(track_2_atom_array, idx_2)
+        if signature_1 != signature_2:
+            raise ValueError(
+                f"Non-fixed shared-chain residue {residue_label} differs between "
+                "tracks. Only fixed motif residues may differ in residue or atom "
+                "identity."
+            )
+
+        update_indices_1.extend(idx_1.tolist())
+        update_indices_2.extend(idx_2.tolist())
+        update_residues.append(
+            {
+                "res_id": int(residue_key),
+                "res_name": res_name_1,
+                "atom_count": int(len(idx_1)),
+            }
+        )
+
+    if not update_indices_1:
+        raise ValueError(
+            "No non-fixed shared-chain atoms remain for coupled denoising after "
+            "excluding fixed motif residues."
+        )
+
+    return SharedAtomMap(
+        update_indices_1=np.asarray(update_indices_1, dtype=np.int64),
+        update_indices_2=np.asarray(update_indices_2, dtype=np.int64),
+        update_residues=update_residues,
+        excluded_fixed_residues=excluded_fixed_residues,
+    )
+
+
+def _shared_residue_groups(
+    atom_array: AtomArray,
+    shared_chain_id: str,
+) -> dict[int, np.ndarray]:
+    """Return global atom indices grouped by residue ID for the shared chain."""
+
+    shared_indices = np.where(shared_chain_mask(atom_array, shared_chain_id))[0]
+    shared_atoms = atom_array[shared_indices]
+    starts = get_residue_starts(shared_atoms, add_exclusive_stop=True)
+    groups: dict[int, np.ndarray] = {}
+    for start, stop in zip(starts[:-1], starts[1:]):
+        res_id = int(shared_atoms.res_id[start])
+        if res_id in groups:
+            raise ValueError(
+                f"Shared chain {shared_chain_id!r} contains duplicate residue ID "
+                f"{res_id}."
+            )
+        groups[res_id] = shared_indices[start:stop]
+    return groups
+
+
+def _validate_atom_mask_length(
+    atom_array: AtomArray,
+    mask: np.ndarray,
+    mask_name: str,
+) -> None:
+    if mask.shape != (atom_array.array_length(),):
+        raise ValueError(
+            f"{mask_name} must be a 1D atom mask with length "
+            f"{atom_array.array_length()}, but got shape {mask.shape}."
+        )
+
+
+def _atom_identity_signature(
+    atom_array: AtomArray,
+    indices: np.ndarray,
+) -> list[tuple[str, str]]:
+    """Build an order-sensitive residue/atom identity signature."""
+
+    return [
+        (str(atom_array.res_name[idx]), str(atom_array.atom_name[idx]))
+        for idx in indices
+    ]
+
+
+def _residue_label(shared_chain_id: str, residue_key: int) -> str:
+    return f"{shared_chain_id}{residue_key}"
 
 
 def relabel_nonshared_chains(
@@ -185,5 +367,35 @@ def append_nonshared_from_track_2(
         # The two track outputs are built independently, so their atom_id
         # annotations can collide after concatenation even when chain IDs differ.
         # Dropping atom_id lets the CIF writer assign unambiguous identifiers.
+        merged.del_annotation("atom_id")
+    return merged
+
+
+def merge_tracks_with_shared_source(
+    track_1_atom_array: AtomArray,
+    track_2_atom_array: AtomArray,
+    shared_chain_id: str,
+    shared_source: str,
+) -> AtomArray:
+    """Merge A+B and A+C while choosing which track contributes shared chain A."""
+
+    if shared_source not in {"track_1", "track_2"}:
+        raise ValueError(f"Unsupported shared_source: {shared_source!r}")
+
+    shared_source_array = (
+        track_1_atom_array if shared_source == "track_1" else track_2_atom_array
+    )
+    shared = shared_source_array[
+        shared_chain_mask(shared_source_array, shared_chain_id)
+    ]
+    nonshared_1 = track_1_atom_array[
+        ~shared_chain_mask(track_1_atom_array, shared_chain_id)
+    ]
+    nonshared_2 = track_2_atom_array[
+        ~shared_chain_mask(track_2_atom_array, shared_chain_id)
+    ]
+    merged = shared.copy() + nonshared_1.copy() + nonshared_2.copy()
+    merged.bonds = None
+    if "atom_id" in merged.get_annotation_categories():
         merged.del_annotation("atom_id")
     return merged

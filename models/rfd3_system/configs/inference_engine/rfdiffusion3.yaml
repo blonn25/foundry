@@ -61,6 +61,7 @@ complex_2_partners:
   - C
 track_1_specification: {}
 track_2_specification: {}
+merged_output_policy: track1  # track1, track2, both, or none
 #########################################################
 
 # Saving args

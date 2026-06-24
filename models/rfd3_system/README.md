@@ -26,6 +26,8 @@ Detailed implementation notes, assumptions, limitations, and validation results
 are in [docs/superdiff_shared_chain.md](docs/superdiff_shared_chain.md).
 The update-proxy, kappa, and residual equations are summarized in
 [docs/shared_chain_coupling_math.md](docs/shared_chain_coupling_math.md).
+The track-specific motif scaffolding plan and command patterns are documented
+in [docs/joint_motif_scaffolding.md](docs/joint_motif_scaffolding.md).
 
 ## Active Layout
 
@@ -35,6 +37,7 @@ configs/                                 Hydra configs used by inference/checkpo
 tests/                                   Unit and regression tests for the copied package
 docs/superdiff_shared_chain.md           Prototype design and validation notes
 docs/shared_chain_coupling_math.md       Coupling equations and diagnostics
+docs/joint_motif_scaffolding.md          Track-specific motif scaffolding notes
 docs/examples/superdiff_shared_chain_proxy.yaml
                                           Minimal example override shape
 archived/                                Upstream RFD3 docs/assets kept for reference only
@@ -87,7 +90,8 @@ For A+B/A+C coupled runs, the engine writes:
 
 - track 1 outputs containing A+B;
 - track 2 outputs containing A+C;
-- merged outputs containing A+B+C;
+- merged outputs containing A+B+C, controlled by
+  `merged_output_policy=track1|track2|both|none`;
 - optional track-specific and merged trajectory files;
 - one merged-output kappa trajectory plot per diffusion batch;
 - metadata with coupling settings and per-step proxy diagnostics.

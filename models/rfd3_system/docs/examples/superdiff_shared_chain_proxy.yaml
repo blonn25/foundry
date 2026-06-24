@@ -19,6 +19,7 @@ example_abc:
 #   shared_chain_id=A \
 #   complex_1_partners='[B]' \
 #   complex_2_partners='[C]' \
+#   merged_output_policy=track1 \
 #   inference_sampler.kind=superdiff_shared_chain \
 #   inference_sampler.num_timesteps=20 \
 #   inference_sampler.proxy_kappa_min=-1.0 \

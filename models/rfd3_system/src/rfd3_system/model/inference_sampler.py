@@ -675,8 +675,8 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
         *,
         track_1: dict[str, Any],
         track_2: dict[str, Any],
-        shared_atom_mask_1: torch.Tensor,
-        shared_atom_mask_2: torch.Tensor,
+        shared_update_atom_indices_1: torch.Tensor,
+        shared_update_atom_indices_2: torch.Tensor,
         diffusion_module: torch.nn.Module,
         diffusion_batch_size: int,
         coupling_metadata: dict[str, Any],
@@ -693,19 +693,29 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
         coord_2 = track_2["coord_atom_lvl_to_be_noised"]
 
         device = coord_1.device
-        shared_atom_mask_1 = shared_atom_mask_1.to(device=device, dtype=torch.bool)
-        shared_atom_mask_2 = shared_atom_mask_2.to(device=device, dtype=torch.bool)
+        shared_update_atom_indices_1 = shared_update_atom_indices_1.to(
+            device=device, dtype=torch.long
+        )
+        shared_update_atom_indices_2 = shared_update_atom_indices_2.to(
+            device=device, dtype=torch.long
+        )
+        if shared_update_atom_indices_1.numel() == 0:
+            raise ValueError(
+                "No non-fixed shared-chain atoms were provided for coupled denoising."
+            )
         fixed_1 = f1["is_motif_atom_with_fixed_coord"].to(device=device, dtype=torch.bool)
         fixed_2 = f2["is_motif_atom_with_fixed_coord"].to(device=device, dtype=torch.bool)
 
-        fixed_shared_1 = fixed_1[shared_atom_mask_1]
-        fixed_shared_2 = fixed_2[shared_atom_mask_2]
-        if fixed_shared_1.shape != fixed_shared_2.shape or not torch.equal(
-            fixed_shared_1, fixed_shared_2
+        if shared_update_atom_indices_1.shape != shared_update_atom_indices_2.shape:
+            raise ValueError(
+                "Shared update atom index arrays must have the same shape."
+            )
+        if torch.any(fixed_1[shared_update_atom_indices_1]) or torch.any(
+            fixed_2[shared_update_atom_indices_2]
         ):
             raise ValueError(
-                "Shared-chain fixed-coordinate masks differ between tracks. The "
-                "prototype requires identical shared-chain masking."
+                "Shared update atom indices include fixed motif atoms. Fixed "
+                "motifs must be excluded from the coupled kappa solve."
             )
 
         noise_schedule_1 = self._construct_inference_noise_schedule(
@@ -756,7 +766,9 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
 
         # Track 1 owns the shared state. Track 2's shared coordinates are
         # overwritten at initialization and before every denoiser call.
-        X2_L[:, shared_atom_mask_2, :] = X1_L[:, shared_atom_mask_1, :]
+        X2_L[:, shared_update_atom_indices_2, :] = X1_L[
+            :, shared_update_atom_indices_1, :
+        ]
 
         X1_noisy_traj = []
         X2_noisy_traj = []
@@ -800,16 +812,17 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
             epsilon_shared = eps_scale * torch.normal(
                 mean=0.0,
                 std=1.0,
-                size=X1_L[:, shared_atom_mask_1, :].shape,
+                size=X1_L[:, shared_update_atom_indices_1, :].shape,
                 device=device,
             )
-            epsilon_shared[:, fixed_shared_1, :] = 0
             epsilon_1[:, fixed_1, :] = 0
             epsilon_2[:, fixed_2, :] = 0
-            epsilon_1[:, shared_atom_mask_1, :] = epsilon_shared
-            epsilon_2[:, shared_atom_mask_2, :] = epsilon_shared
+            epsilon_1[:, shared_update_atom_indices_1, :] = epsilon_shared
+            epsilon_2[:, shared_update_atom_indices_2, :] = epsilon_shared
 
-            X2_L[:, shared_atom_mask_2, :] = X1_L[:, shared_atom_mask_1, :]
+            X2_L[:, shared_update_atom_indices_2, :] = X1_L[
+                :, shared_update_atom_indices_1, :
+            ]
             X1_noisy_L = X1_L + epsilon_1
             X2_noisy_L = X2_L + epsilon_2
 
@@ -837,8 +850,8 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
 
             delta_1 = (X1_noisy_L - X1_denoised_L) / t_hat
             delta_2 = (X2_noisy_L - X2_denoised_L) / t_hat
-            delta_A_1 = delta_1[:, shared_atom_mask_1, :]
-            delta_A_2 = delta_2[:, shared_atom_mask_2, :]
+            delta_A_1 = delta_1[:, shared_update_atom_indices_1, :]
+            delta_A_2 = delta_2[:, shared_update_atom_indices_2, :]
 
             diag = solve_two_track_proxy_kappa(
                 delta_A_1,
@@ -873,11 +886,11 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
 
             X1_next = X1_noisy_L + step_scale * d_t * delta_1
             X2_next = X2_noisy_L + step_scale * d_t * delta_2
-            shared_next = X1_noisy_L[:, shared_atom_mask_1, :] + (
+            shared_next = X1_noisy_L[:, shared_update_atom_indices_1, :] + (
                 step_scale * d_t * delta_A_mix
             )
-            X1_next[:, shared_atom_mask_1, :] = shared_next
-            X2_next[:, shared_atom_mask_2, :] = shared_next
+            X1_next[:, shared_update_atom_indices_1, :] = shared_next
+            X2_next[:, shared_update_atom_indices_2, :] = shared_next
 
             X1_L = X1_next
             X2_L = X2_next

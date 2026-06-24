@@ -6,7 +6,7 @@ from dataclasses import dataclass, field
 from html import escape
 from os import PathLike
 from pathlib import Path
-from typing import Dict, List, Optional
+from typing import Dict, List, Literal, Optional
 
 import numpy as np
 import torch
@@ -30,11 +30,11 @@ from rfd3_system.inference.input_parsing import (
 )
 from rfd3_system.model.inference_sampler import SampleDiffusionConfig
 from rfd3_system.system.chains import (
-    append_nonshared_from_track_2,
     assert_matching_shared_chain,
+    build_shared_update_atom_map,
     chain_mask,
+    merge_tracks_with_shared_source,
     relabel_nonshared_chains,
-    shared_chain_mask,
     subset_by_chains,
 )
 from rfd3_system.utils.inference import (
@@ -71,6 +71,7 @@ class RFD3InferenceConfig:
     complex_2_partners: List[str] = field(default_factory=lambda: ["C"])
     track_1_specification: Optional[dict] = field(default_factory=dict)
     track_2_specification: Optional[dict] = field(default_factory=dict)
+    merged_output_policy: Literal["track1", "track2", "both", "none"] = "track1"
 
     # Saving args
     cleanup_guideposts: bool = True
@@ -121,9 +122,9 @@ class RFD3Output:
     ):
         base_path = os.path.join(out_dir, self.example_id)
         base_path = Path(base_path).absolute()
-        allow_ambiguous_bond_annotations = (
-            self.metadata.get("coupling", {}).get("output")
-            == "merged_A_plus_all_partners"
+        coupling_output = str(self.metadata.get("coupling", {}).get("output", ""))
+        allow_ambiguous_bond_annotations = coupling_output.startswith(
+            "merged_A_plus_all_partners"
         )
         to_cif_file(
             self.atom_array,
@@ -192,6 +193,7 @@ class RFD3InferenceEngine(BaseInferenceEngine):
         complex_2_partners: list[str] | None = None,
         track_1_specification: dict | None = None,
         track_2_specification: dict | None = None,
+        merged_output_policy: str = "track1",
         **kwargs,
     ):
         super().__init__(
@@ -217,6 +219,11 @@ class RFD3InferenceEngine(BaseInferenceEngine):
         self.complex_2_partners = list(complex_2_partners or ["C"])
         self.track_1_specification = dict(track_1_specification or {})
         self.track_2_specification = dict(track_2_specification or {})
+        self.merged_output_policy = str(merged_output_policy)
+        if self.merged_output_policy not in {"track1", "track2", "both", "none"}:
+            raise ValueError(
+                "merged_output_policy must be one of: track1, track2, both, none."
+            )
 
         # Setup output directories and args
         self.global_prefix = global_prefix
@@ -438,8 +445,13 @@ class RFD3InferenceEngine(BaseInferenceEngine):
         """Build two track views, run coupled inference, and format outputs."""
 
         t0 = time.time()
-        base_spec = self._ensure_design_spec(example_spec)
-        track_1_spec, track_2_spec = self._build_coupled_track_specs(base_spec)
+        if self._uses_track_specific_inputs():
+            track_1_spec, track_2_spec = self._build_coupled_track_input_specs(
+                example_spec
+            )
+        else:
+            base_spec = self._ensure_design_spec(example_spec)
+            track_1_spec, track_2_spec = self._build_coupled_track_specs(base_spec)
 
         track_1_output = self.pipeline(
             track_1_spec.to_pipeline_input(example_id=f"{example_id}_track1")
@@ -447,31 +459,37 @@ class RFD3InferenceEngine(BaseInferenceEngine):
         track_2_output = self.pipeline(
             track_2_spec.to_pipeline_input(example_id=f"{example_id}_track2")
         )
-        assert_matching_shared_chain(
+
+        shared_atom_map = build_shared_update_atom_map(
             track_1_output["atom_array"],
             track_2_output["atom_array"],
             self.shared_chain_id,
-        )
-
-        shared_mask_1_np = shared_chain_mask(
-            track_1_output["atom_array"], self.shared_chain_id
-        )
-        shared_mask_2_np = shared_chain_mask(
-            track_2_output["atom_array"], self.shared_chain_id
+            self._feature_mask_np(track_1_output, "is_motif_atom_with_fixed_coord"),
+            self._feature_mask_np(track_2_output, "is_motif_atom_with_fixed_coord"),
+            self._feature_mask_np(track_1_output, "is_motif_atom_with_fixed_seq"),
+            self._feature_mask_np(track_2_output, "is_motif_atom_with_fixed_seq"),
         )
         self._validate_shared_initial_coordinates(
             track_1_output,
             track_2_output,
-            shared_mask_1_np,
-            shared_mask_2_np,
+            shared_atom_map.update_indices_1,
+            shared_atom_map.update_indices_2,
         )
 
         with torch.no_grad():
             track_1_device = self.trainer.fabric.to_device(track_1_output)
             track_2_device = self.trainer.fabric.to_device(track_2_output)
             device = track_1_device["coord_atom_lvl_to_be_noised"].device
-            shared_mask_1 = torch.as_tensor(shared_mask_1_np, dtype=torch.bool, device=device)
-            shared_mask_2 = torch.as_tensor(shared_mask_2_np, dtype=torch.bool, device=device)
+            shared_indices_1 = torch.as_tensor(
+                shared_atom_map.update_indices_1,
+                dtype=torch.long,
+                device=device,
+            )
+            shared_indices_2 = torch.as_tensor(
+                shared_atom_map.update_indices_2,
+                dtype=torch.long,
+                device=device,
+            )
 
             model = self._get_forward_coupled_model(self.trainer.state["model"])
             network_output = model.forward_coupled(
@@ -483,9 +501,9 @@ class RFD3InferenceEngine(BaseInferenceEngine):
                 track_2_coord_atom_lvl_to_be_noised=track_2_device[
                     "coord_atom_lvl_to_be_noised"
                 ],
-                shared_atom_mask_1=shared_mask_1,
-                shared_atom_mask_2=shared_mask_2,
-                coupling_metadata=self._base_coupling_metadata(),
+                shared_update_atom_indices_1=shared_indices_1,
+                shared_update_atom_indices_2=shared_indices_2,
+                coupling_metadata=self._base_coupling_metadata(shared_atom_map),
             )
 
         track_1_arrays, track_1_metadata = self.trainer._build_predicted_atom_array_stack(
@@ -534,6 +552,94 @@ class RFD3InferenceEngine(BaseInferenceEngine):
         if isinstance(spec, DesignInputSpecification):
             return spec
         return DesignInputSpecification.safe_init(**spec)
+
+    def _uses_track_specific_inputs(self) -> bool:
+        has_track_1_input = self._track_spec_has_input(self.track_1_specification)
+        has_track_2_input = self._track_spec_has_input(self.track_2_specification)
+        if has_track_1_input != has_track_2_input:
+            raise ValueError(
+                "Track-specific motif input mode requires both "
+                "track_1_specification and track_2_specification to provide an "
+                "input or atom_array_input."
+            )
+        return has_track_1_input and has_track_2_input
+
+    @staticmethod
+    def _track_spec_has_input(track_spec: dict) -> bool:
+        return exists(track_spec.get("input")) or exists(track_spec.get("atom_array_input"))
+
+    def _build_coupled_track_input_specs(
+        self,
+        example_spec: dict | DesignInputSpecification,
+    ) -> tuple[DesignInputSpecification, DesignInputSpecification]:
+        """Build complete track specs from user-provided A+B and A+C inputs."""
+
+        base_dict = self._base_track_input_defaults(example_spec)
+        track_1_dict = self._track_input_spec_dict(
+            base_dict,
+            track_name="track_1",
+            track_chains=[self.shared_chain_id] + self.complex_1_partners,
+            overrides=self.track_1_specification,
+        )
+        track_2_dict = self._track_input_spec_dict(
+            base_dict,
+            track_name="track_2",
+            track_chains=[self.shared_chain_id] + self.complex_2_partners,
+            overrides=self.track_2_specification,
+        )
+
+        track_1_spec = DesignInputSpecification.safe_init(**track_1_dict)
+        track_2_spec = DesignInputSpecification.safe_init(**track_2_dict)
+        if not self._has_origin_controls(track_1_dict) and not self._has_origin_controls(
+            track_2_dict
+        ):
+            common_origin = self._common_origin_from_many(
+                [track_1_spec.atom_array_input, track_2_spec.atom_array_input]
+            )
+            track_1_dict["ori_token"] = common_origin
+            track_2_dict["ori_token"] = common_origin
+            track_1_spec = DesignInputSpecification.safe_init(**track_1_dict)
+            track_2_spec = DesignInputSpecification.safe_init(**track_2_dict)
+        return track_1_spec, track_2_spec
+
+    @staticmethod
+    def _base_track_input_defaults(
+        example_spec: dict | DesignInputSpecification,
+    ) -> dict:
+        if isinstance(example_spec, DesignInputSpecification):
+            spec_dict = example_spec.get_dict_to_save()
+            extra = dict(example_spec.extra or {})
+        else:
+            spec_dict = dict(example_spec or {})
+            extra = dict(spec_dict.get("extra", {}) or {})
+        spec_dict.pop("input", None)
+        spec_dict.pop("atom_array_input", None)
+        spec_dict["extra"] = extra
+        return spec_dict
+
+    @staticmethod
+    def _track_input_spec_dict(
+        base_dict: dict,
+        *,
+        track_name: str,
+        track_chains: list[str],
+        overrides: dict,
+    ) -> dict:
+        spec_dict = dict(base_dict)
+        spec_dict.update(overrides)
+        extra = dict(base_dict.get("extra", {}) or {})
+        extra.update(dict(spec_dict.get("extra", {}) or {}))
+        extra["coupled_track"] = track_name
+        extra["coupled_track_chains"] = track_chains
+        extra["track_specific_input_mode"] = True
+        spec_dict["extra"] = extra
+        return spec_dict
+
+    @staticmethod
+    def _has_origin_controls(spec_dict: dict) -> bool:
+        return exists(spec_dict.get("ori_token")) or exists(
+            spec_dict.get("infer_ori_strategy")
+        )
 
     def _build_coupled_track_specs(
         self, base_spec: DesignInputSpecification
@@ -616,36 +722,66 @@ class RFD3InferenceEngine(BaseInferenceEngine):
             return [0.0, 0.0, 0.0]
         return np.mean(coord[finite], axis=0).astype(float).tolist()
 
+    @staticmethod
+    def _common_origin_from_many(atom_arrays: list[AtomArray]) -> list[float]:
+        coords = []
+        for atom_array in atom_arrays:
+            coord = atom_array.coord
+            finite = np.isfinite(coord).all(axis=-1)
+            if np.any(finite):
+                coords.append(coord[finite])
+        if not coords:
+            return [0.0, 0.0, 0.0]
+        return np.mean(np.concatenate(coords, axis=0), axis=0).astype(float).tolist()
+
     def _validate_shared_initial_coordinates(
         self,
         track_1_output: dict,
         track_2_output: dict,
-        shared_mask_1: np.ndarray,
-        shared_mask_2: np.ndarray,
+        shared_indices_1: np.ndarray,
+        shared_indices_2: np.ndarray,
     ) -> None:
-        coord_1 = track_1_output["coord_atom_lvl_to_be_noised"][:, shared_mask_1, :]
-        coord_2 = track_2_output["coord_atom_lvl_to_be_noised"][:, shared_mask_2, :]
+        coord_1 = track_1_output["coord_atom_lvl_to_be_noised"][:, shared_indices_1, :]
+        coord_2 = track_2_output["coord_atom_lvl_to_be_noised"][:, shared_indices_2, :]
         if coord_1.shape != coord_2.shape or not torch.allclose(
             coord_1, coord_2, atol=1e-4, rtol=1e-4
         ):
             raise ValueError(
-                "Shared-chain initial coordinates differ after track pipeline "
-                "construction. Provide a common ori_token/infer_ori_strategy or "
-                "track-specific overrides that keep chain A in the same frame."
+                "Shared non-fixed chain coordinates differ after track pipeline "
+                "construction. Provide track-specific inputs in the same frame or "
+                "common ori_token/infer_ori_strategy settings."
             )
 
-    def _base_coupling_metadata(self) -> dict:
+    @staticmethod
+    def _feature_mask_np(pipeline_output: dict, feature_name: str) -> np.ndarray:
+        value = pipeline_output["feats"][feature_name]
+        if isinstance(value, torch.Tensor):
+            value = value.detach().cpu().numpy()
+        mask = np.asarray(value, dtype=bool)
+        if mask.ndim == 2 and mask.shape[0] == 1:
+            mask = mask[0]
+        if mask.ndim != 1:
+            raise ValueError(
+                f"Expected atom-level feature mask {feature_name!r} to be 1D, "
+                f"but received shape {mask.shape}."
+            )
+        return mask
+
+    def _base_coupling_metadata(self, shared_atom_map) -> dict:
+        sequence_policy = (
+            "Track-specific sequence logits are left uncoupled. Merged outputs "
+            f"are controlled by merged_output_policy={self.merged_output_policy!r}."
+        )
         return {
             "coupling_mode": self.coupling_mode,
             "shared_chain_id": self.shared_chain_id,
             "complex_1_partners": self.complex_1_partners,
             "complex_2_partners": self.complex_2_partners,
+            "merged_output_policy": self.merged_output_policy,
             "implementation": "approximate denoiser-delta proxy",
             "superdiff_exact": False,
-            "sequence_policy": (
-                "Track-specific sequence logits are left uncoupled. The merged "
-                "A+B+C output uses chain A from track 1."
-            ),
+            "sequence_policy": sequence_policy,
+            "shared_atom_mapping": shared_atom_map.to_metadata(),
         }
 
     def _build_coupled_rfd3_outputs(
@@ -667,11 +803,16 @@ class RFD3InferenceEngine(BaseInferenceEngine):
             self.shared_chain_id,
             self.complex_2_partners,
         )
-        merged_template = append_nonshared_from_track_2(
-            track_1_output["atom_array"],
-            track_2_template,
-            self.shared_chain_id,
-        )
+        merged_sources = self._merged_shared_sources()
+        merged_templates = {
+            source: merge_tracks_with_shared_source(
+                track_1_output["atom_array"],
+                track_2_template,
+                self.shared_chain_id,
+                source,
+            )
+            for source in merged_sources
+        }
 
         for idx in range(len(track_1_arrays)):
             track_2_array = relabel_nonshared_chains(
@@ -685,31 +826,11 @@ class RFD3InferenceEngine(BaseInferenceEngine):
             denoised_2, noisy_2 = self._trajectory_stacks(
                 network_output["track_2"], track_2_template, idx
             )
-            merged_array = append_nonshared_from_track_2(
-                track_1_arrays[idx], track_2_array, self.shared_chain_id
-            )
-            denoised_merged = None
-            noisy_merged = None
-            if self.dump_trajectories:
-                merged_network_output = self._merged_network_output(
-                    network_output,
-                    track_2_template,
-                )
-                denoised_merged, noisy_merged = self._trajectory_stacks(
-                    merged_network_output, merged_template, idx
-                )
 
             metadata_1 = dict(track_1_metadata[idx])
             metadata_1["coupling"] = coupling_metadata | {"output": "track_1_A_plus_partners"}
             metadata_2 = dict(track_2_metadata[idx])
             metadata_2["coupling"] = coupling_metadata | {"output": "track_2_A_plus_partners"}
-            metadata_merged = {
-                "coupling": coupling_metadata | {"output": "merged_A_plus_all_partners"},
-                "source_outputs": {
-                    "track_1": f"{example_id}_track1_model_{idx}",
-                    "track_2": f"{example_id}_track2_model_{idx}",
-                },
-            }
 
             outputs.extend(
                 [
@@ -727,30 +848,90 @@ class RFD3InferenceEngine(BaseInferenceEngine):
                         denoised_trajectory_stack=denoised_2,
                         noisy_trajectory_stack=noisy_2,
                     ),
+                ]
+            )
+
+            for source in merged_sources:
+                merged_array = merge_tracks_with_shared_source(
+                    track_1_arrays[idx],
+                    track_2_array,
+                    self.shared_chain_id,
+                    source,
+                )
+                denoised_merged = None
+                noisy_merged = None
+                if self.dump_trajectories:
+                    merged_network_output = self._merged_network_output(
+                        network_output,
+                        track_1_output["atom_array"],
+                        track_2_template,
+                        source,
+                    )
+                    denoised_merged, noisy_merged = self._trajectory_stacks(
+                        merged_network_output, merged_templates[source], idx
+                    )
+
+                source_label = source.replace("_", "")
+                output_kind = f"merged_A_plus_all_partners_{source_label}"
+                if self.merged_output_policy == "track1" and source == "track_1":
+                    output_id = f"{example_id}_merged_model_{idx}"
+                else:
+                    output_id = f"{example_id}_merged_{source_label}_model_{idx}"
+
+                metadata_merged = {
+                    "coupling": coupling_metadata
+                    | {
+                        "output": output_kind,
+                        "shared_chain_source": source,
+                    },
+                    "source_outputs": {
+                        "track_1": f"{example_id}_track1_model_{idx}",
+                        "track_2": f"{example_id}_track2_model_{idx}",
+                    },
+                }
+                outputs.append(
                     RFD3Output(
-                        example_id=f"{example_id}_merged_model_{idx}",
+                        example_id=output_id,
                         atom_array=merged_array,
                         metadata=metadata_merged,
                         denoised_trajectory_stack=denoised_merged,
                         noisy_trajectory_stack=noisy_merged,
-                    ),
-                ]
-            )
+                    )
+                )
         return outputs
 
+    def _merged_shared_sources(self) -> list[str]:
+        """Return the shared-chain sources requested by merged_output_policy."""
+
+        if self.merged_output_policy == "none":
+            return []
+        if self.merged_output_policy == "track1":
+            return ["track_1"]
+        if self.merged_output_policy == "track2":
+            return ["track_2"]
+        return ["track_1", "track_2"]
+
     def _merged_network_output(
-        self, network_output: dict, track_2_atom_array: AtomArray
+        self,
+        network_output: dict,
+        track_1_atom_array: AtomArray,
+        track_2_atom_array: AtomArray,
+        shared_source: str,
     ) -> dict:
         return {
             "X_noisy_L_traj": [
-                self._merge_track_coords(x1, x2, track_2_atom_array)
+                self._merge_track_coords(
+                    x1, x2, track_1_atom_array, track_2_atom_array, shared_source
+                )
                 for x1, x2 in zip(
                     network_output["track_1"]["X_noisy_L_traj"],
                     network_output["track_2"]["X_noisy_L_traj"],
                 )
             ],
             "X_denoised_L_traj": [
-                self._merge_track_coords(x1, x2, track_2_atom_array)
+                self._merge_track_coords(
+                    x1, x2, track_1_atom_array, track_2_atom_array, shared_source
+                )
                 for x1, x2 in zip(
                     network_output["track_1"]["X_denoised_L_traj"],
                     network_output["track_2"]["X_denoised_L_traj"],
@@ -762,15 +943,39 @@ class RFD3InferenceEngine(BaseInferenceEngine):
         self,
         coords_1: torch.Tensor,
         coords_2: torch.Tensor,
+        track_1_atom_array: AtomArray,
         track_2_atom_array: AtomArray,
+        shared_source: str,
     ):
-        # The merged atom array is track 1 plus track 2's non-shared atoms.
-        # Coordinate tensors are ordered in the same way.
-        nonshared_2 = ~chain_mask(track_2_atom_array, self.shared_chain_id)
-        nonshared_2 = torch.as_tensor(
-            nonshared_2, dtype=torch.bool, device=coords_2.device
+        # Match merge_tracks_with_shared_source(): shared chain from the chosen
+        # track, then track 1 partners, then track 2 partners.
+        if shared_source not in {"track_1", "track_2"}:
+            raise ValueError(f"Unsupported shared_source: {shared_source!r}")
+        shared_1 = torch.as_tensor(
+            chain_mask(track_1_atom_array, self.shared_chain_id),
+            dtype=torch.bool,
+            device=coords_1.device,
         )
-        return torch.cat([coords_1, coords_2[:, nonshared_2, :]], dim=1)
+        shared_2 = torch.as_tensor(
+            chain_mask(track_2_atom_array, self.shared_chain_id),
+            dtype=torch.bool,
+            device=coords_2.device,
+        )
+        shared_coords = (
+            coords_1[:, shared_1, :]
+            if shared_source == "track_1"
+            else coords_2[:, shared_2, :]
+        )
+        nonshared_1 = ~shared_1
+        nonshared_2 = ~shared_2
+        return torch.cat(
+            [
+                shared_coords,
+                coords_1[:, nonshared_1, :],
+                coords_2[:, nonshared_2, :],
+            ],
+            dim=1,
+        )
 
     def _trajectory_stacks(self, network_output: dict, atom_array: AtomArray, idx: int):
         if not self.dump_trajectories:
@@ -942,7 +1147,8 @@ def _maybe_dump_kappa_plot(metadata: dict, base_path: Path) -> None:
     """Write one kappa trajectory plot for a coupled merged-output batch."""
 
     coupling = metadata.get("coupling", {})
-    if coupling.get("output") != "merged_A_plus_all_partners":
+    output_kind = str(coupling.get("output", ""))
+    if not output_kind.startswith("merged_A_plus_all_partners"):
         return
 
     # The coupling diagnostics are batch-level.  Only write the plot for
