@@ -137,6 +137,13 @@ Use residue/all-atom fixed selections for chemically variant A motifs such as
 canonical backbone scaffolding, but a PTM side chain should generally be fixed
 as motif context if the PTM chemistry is part of the design condition.
 
+When using `unindex` for guidepost-style motif scaffolding across multiple
+source chains, include `/0` between source-chain groups. For example, use
+`A237-240,/0,B56,B129-133` rather than `A237-240,B56,B129-133`. Without the
+chain break, RFD3 treats the later guideposts as part of the same unindexed
+guidepost chain, which can make B-source guideposts appear in the shared A
+chain during `rfd3_system` validation.
+
 Do not use `select_unfixed_sequence=true` when fixed motif sequences must be
 preserved. Instead, explicitly select only the non-motif designable ranges.
 For example, if A motifs are A12-15 and A48-52, B has motif B20-25, and C has

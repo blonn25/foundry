@@ -159,7 +159,8 @@ def build_shared_update_atom_map(
         raise ValueError(
             "Shared-chain residue identities differ between tracks. Non-fixed "
             "shared-chain residues must have matching residue IDs, and fixed "
-            "shared-chain motif residues must have matching src_component labels."
+            "shared-chain motif residues must have matching src_component labels. "
+            f"{_format_key_difference(keys_1, keys_2)}"
         )
 
     update_indices_1 = []
@@ -324,6 +325,21 @@ def _residue_label(shared_chain_id: str, residue_key: ResidueKey) -> str:
     if key_type == "src_component":
         return str(key_value)
     return f"{shared_chain_id}{key_value}"
+
+
+def _format_key_difference(keys_1: list[ResidueKey], keys_2: list[ResidueKey]) -> str:
+    """Return a compact description of keys present in only one track."""
+
+    set_1 = set(keys_1)
+    set_2 = set(keys_2)
+    only_1 = [_format_residue_key(key) for key in keys_1 if key not in set_2]
+    only_2 = [_format_residue_key(key) for key in keys_2 if key not in set_1]
+    return f"Only in track 1: {only_1}; only in track 2: {only_2}."
+
+
+def _format_residue_key(residue_key: ResidueKey) -> str:
+    key_type, key_value = residue_key
+    return f"{key_type}:{key_value}"
 
 
 def _update_residue_metadata(
