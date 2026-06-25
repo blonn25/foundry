@@ -499,6 +499,10 @@ This reads the JSON diagnostics and writes:
 *_proxy_residual.png
 ```
 
+If both merged output policies are written, the diagnostics are duplicated in
+the two merged JSON files. The plotter collapses those to one kappa PNG and one
+proxy-residual PNG per diffusion batch.
+
 The proxy-residual PNG uses the same normalized `t` x-axis. Its y-axis is the
 post-clamp residual defined above; values closer to zero indicate that the
 implemented proxy equalization condition was better satisfied at that denoising

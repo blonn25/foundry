@@ -119,6 +119,10 @@ The script reads merged-output JSON files and writes PNG plots next to the JSON:
 *_proxy_residual.png
 ```
 
+When `merged_output_policy=both`, the two merged JSON files contain the same
+batch-level diagnostics, so the script writes one kappa PNG and one
+proxy-residual PNG per batch rather than one copy per merged output policy.
+
 During coupled inference, the sampler logs periodic progress lines with the
 step count, normalized `t`, `t_hat`, kappa mean/min/max, and mean absolute
 proxy residual. These messages are intended for SLURM log monitoring during

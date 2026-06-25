@@ -74,6 +74,7 @@ def main() -> int:
     if args.out_dir is not None:
         args.out_dir.mkdir(parents=True, exist_ok=True)
 
+    plotted_prefixes: set[Path] = set()
     written = 0
     skipped = 0
     for json_path in json_paths:
@@ -83,6 +84,7 @@ def main() -> int:
                 out_dir=args.out_dir,
                 all_models=args.all_models,
                 dpi=args.dpi,
+                plotted_prefixes=plotted_prefixes,
             )
         except Exception as exc:  # noqa: BLE001 - keep batch plotting robust.
             skipped += 1
@@ -118,6 +120,7 @@ def _plot_one_json(
     out_dir: Path | None,
     all_models: bool,
     dpi: int,
+    plotted_prefixes: set[Path],
 ) -> list[Path]:
     """Create kappa and proxy-residual PNGs for one coupled output JSON."""
 
@@ -137,6 +140,8 @@ def _plot_one_json(
 
     if out_dir is not None:
         plot_prefix = out_dir / plot_prefix.name
+    if plot_prefix in plotted_prefixes:
+        return []
 
     shared = str(coupling.get("shared_chain_id", "A"))
     track_1_label = _complex_label(shared, coupling.get("complex_1_partners", ["B"]))
@@ -182,6 +187,8 @@ def _plot_one_json(
         )
         paths.append(residual_path)
 
+    if paths:
+        plotted_prefixes.add(plot_prefix)
     return paths
 
 
@@ -196,8 +203,18 @@ def _plot_prefix_for_json(json_path: Path, *, all_models: bool) -> Path | None:
 
     prefix, suffix = stem_text.rsplit(marker, 1)
     if suffix == "0" or all_models:
-        return Path(prefix)
+        return _batch_diagnostic_plot_prefix(Path(prefix))
     return None
+
+
+def _batch_diagnostic_plot_prefix(prefix: Path) -> Path:
+    """Collapse merged_track1/2 metadata files to one batch-level plot prefix."""
+
+    prefix_text = str(prefix)
+    for track_suffix in ("_merged_track1", "_merged_track2"):
+        if prefix_text.endswith(track_suffix):
+            return Path(f"{prefix_text[: -len(track_suffix)]}_merged")
+    return prefix
 
 
 def _as_step_sample_array(values, name: str) -> np.ndarray:

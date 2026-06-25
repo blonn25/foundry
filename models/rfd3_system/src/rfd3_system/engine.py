@@ -1159,9 +1159,9 @@ def _maybe_dump_kappa_plot(metadata: dict, base_path: Path) -> None:
         prefix, suffix = stem.rsplit(marker, 1)
         if suffix != "0":
             return
-        plot_path = f"{prefix}_kappa.png"
+        plot_prefix = _batch_diagnostic_plot_prefix(prefix)
     else:
-        plot_path = f"{stem}_kappa.png"
+        plot_prefix = _batch_diagnostic_plot_prefix(stem)
 
     diagnostics = coupling.get("diagnostics", {})
     if "kappa" not in diagnostics:
@@ -1187,7 +1187,9 @@ def _maybe_dump_kappa_plot(metadata: dict, base_path: Path) -> None:
             coupling.get("complex_2_partners", ["C"]),
         )
 
-        plot_path = plot_path.removesuffix(".png") + ".svg"
+        plot_path = f"{plot_prefix}_kappa.svg"
+        if Path(plot_path).exists():
+            return
         _write_kappa_svg(
             plot_path=plot_path,
             kappa=kappa,
@@ -1200,6 +1202,15 @@ def _maybe_dump_kappa_plot(metadata: dict, base_path: Path) -> None:
         ranked_logger.info(f"Kappa trajectory plot written to {plot_path}.")
     except Exception as exc:
         ranked_logger.warning(f"Skipping kappa plot due to plotting error: {exc}")
+
+
+def _batch_diagnostic_plot_prefix(prefix: str) -> str:
+    """Collapse track-specific merged outputs to one batch-level plot prefix."""
+
+    for track_suffix in ("_merged_track1", "_merged_track2"):
+        if prefix.endswith(track_suffix):
+            return f"{prefix[: -len(track_suffix)]}_merged"
+    return prefix
 
 
 def _write_kappa_svg(
