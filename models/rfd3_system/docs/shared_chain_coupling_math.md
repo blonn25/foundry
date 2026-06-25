@@ -457,9 +457,9 @@ satisfied, commonly because:
 If `degenerate = true`, the solve was considered numerically unreliable and
 the implementation falls back to `kappa_raw = 0.5` before clamping.
 
-## Kappa Plot Interpretation
+## Diagnostic Plot Interpretation
 
-Future coupled merged outputs include a batch-level SVG plot:
+Coupled merged outputs include a batch-level SVG kappa plot:
 
 ```text
 *_merged_kappa.svg
@@ -482,6 +482,27 @@ Interpretation:
 
 The physical RFD3 noise scale `t_hat` is still saved in JSON diagnostics for
 analysis, but it is not used as the kappa plot x-axis.
+
+For PNG plots, run the post-processing script after inference with a Python
+environment that has Matplotlib installed:
+
+```bash
+envs/esm/bin/python \
+  software/foundry/models/rfd3_system/scripts/plot_coupling_diagnostics.py \
+  outputs/foundry/rfd3_system/<run_dir>
+```
+
+This reads the JSON diagnostics and writes:
+
+```text
+*_kappa.png
+*_proxy_residual.png
+```
+
+The proxy-residual PNG uses the same normalized `t` x-axis. Its y-axis is the
+post-clamp residual defined above; values closer to zero indicate that the
+implemented proxy equalization condition was better satisfied at that denoising
+step.
 
 ## Exactness Caveat
 

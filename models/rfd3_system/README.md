@@ -40,6 +40,7 @@ docs/shared_chain_coupling_math.md       Coupling equations and diagnostics
 docs/joint_motif_scaffolding.md          Track-specific motif scaffolding notes
 docs/examples/superdiff_shared_chain_proxy.yaml
                                           Minimal example override shape
+scripts/plot_coupling_diagnostics.py     Post-run Matplotlib diagnostics plotter
 archived/                                Upstream RFD3 docs/assets kept for reference only
 ```
 
@@ -93,13 +94,30 @@ For A+B/A+C coupled runs, the engine writes:
 - merged outputs containing A+B+C, controlled by
   `merged_output_policy=track1|track2|both|none`;
 - optional track-specific and merged trajectory files;
-- one merged-output kappa trajectory plot per diffusion batch;
+- one merged-output kappa SVG plot per diffusion batch;
 - metadata with coupling settings and per-step proxy diagnostics.
 
 The kappa SVG uses normalized `t` values along the x-axis. Values increase from
 0 to 1 as the trajectory moves from noisy states toward the final denoised
 structure. The physical RFD3 noise scale `t_hat` is still recorded in the JSON
 diagnostics for runs that need noise-level interpretation.
+
+To create PNG plots after a run, use the Matplotlib post-processing script with
+an environment that has Matplotlib installed. On CoreHPC, `envs/esm` is already
+validated for this:
+
+```bash
+envs/esm/bin/python \
+  software/foundry/models/rfd3_system/scripts/plot_coupling_diagnostics.py \
+  outputs/foundry/rfd3_system/<run_dir>
+```
+
+The script reads merged-output JSON files and writes PNG plots next to the JSON:
+
+```text
+*_kappa.png
+*_proxy_residual.png
+```
 
 During coupled inference, the sampler logs periodic progress lines with the
 step count, normalized `t`, `t_hat`, kappa mean/min/max, and mean absolute
