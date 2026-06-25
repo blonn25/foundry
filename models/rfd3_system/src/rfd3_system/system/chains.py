@@ -8,6 +8,8 @@ from dataclasses import dataclass
 import numpy as np
 from biotite.structure import AtomArray, get_residue_starts
 
+ResidueKey = tuple[str, int | str]
+
 
 @dataclass(frozen=True)
 class SharedAtomMap:
@@ -141,14 +143,23 @@ def build_shared_update_atom_map(
     _validate_atom_mask_length(track_1_atom_array, fixed_seq_mask_1, "fixed_seq_mask_1")
     _validate_atom_mask_length(track_2_atom_array, fixed_seq_mask_2, "fixed_seq_mask_2")
 
-    groups_1 = _shared_residue_groups(track_1_atom_array, shared_chain_id)
-    groups_2 = _shared_residue_groups(track_2_atom_array, shared_chain_id)
+    groups_1 = _shared_residue_groups(
+        track_1_atom_array,
+        shared_chain_id,
+        fixed_coord_mask_1,
+    )
+    groups_2 = _shared_residue_groups(
+        track_2_atom_array,
+        shared_chain_id,
+        fixed_coord_mask_2,
+    )
     keys_1 = list(groups_1)
     keys_2 = list(groups_2)
     if keys_1 != keys_2:
         raise ValueError(
-            "Shared-chain residue numbering differs between tracks. Track-specific "
-            "A motif inputs must keep chain A residue IDs aligned."
+            "Shared-chain residue identities differ between tracks. Non-fixed "
+            "shared-chain residues must have matching residue IDs, and fixed "
+            "shared-chain motif residues must have matching src_component labels."
         )
 
     update_indices_1 = []
@@ -182,12 +193,15 @@ def build_shared_update_atom_map(
                     "from select_unfixed_sequence."
                 )
             excluded_fixed_residues.append(
-                {
-                    "res_id": int(residue_key),
-                    "track_1_res_name": res_name_1,
-                    "track_2_res_name": res_name_2,
-                    "reason": "fixed_motif_context",
-                }
+                _fixed_residue_metadata(
+                    track_1_atom_array,
+                    track_2_atom_array,
+                    idx_1,
+                    idx_2,
+                    residue_key,
+                    res_name_1,
+                    res_name_2,
+                )
             )
             continue
 
@@ -203,11 +217,7 @@ def build_shared_update_atom_map(
         update_indices_1.extend(idx_1.tolist())
         update_indices_2.extend(idx_2.tolist())
         update_residues.append(
-            {
-                "res_id": int(residue_key),
-                "res_name": res_name_1,
-                "atom_count": int(len(idx_1)),
-            }
+            _update_residue_metadata(residue_key, res_name_1, len(idx_1))
         )
 
     if not update_indices_1:
@@ -227,22 +237,62 @@ def build_shared_update_atom_map(
 def _shared_residue_groups(
     atom_array: AtomArray,
     shared_chain_id: str,
-) -> dict[int, np.ndarray]:
-    """Return global atom indices grouped by residue ID for the shared chain."""
+    fixed_coord_mask: np.ndarray,
+) -> dict[ResidueKey, np.ndarray]:
+    """Return global atom indices grouped by shared-chain identity.
+
+    Movable shared-chain residues are keyed by their generated residue ID. Fixed
+    motif/guidepost residues are keyed by src_component when available, because
+    RFD3 may assign different temporary residue IDs to the same unindexed source
+    motif in different track contexts.
+    """
 
     shared_indices = np.where(shared_chain_mask(atom_array, shared_chain_id))[0]
     shared_atoms = atom_array[shared_indices]
     starts = get_residue_starts(shared_atoms, add_exclusive_stop=True)
-    groups: dict[int, np.ndarray] = {}
+    groups: dict[ResidueKey, np.ndarray] = {}
     for start, stop in zip(starts[:-1], starts[1:]):
-        res_id = int(shared_atoms.res_id[start])
-        if res_id in groups:
+        residue_indices = shared_indices[start:stop]
+        residue_key = _shared_residue_key(atom_array, residue_indices, fixed_coord_mask)
+        if residue_key in groups:
             raise ValueError(
-                f"Shared chain {shared_chain_id!r} contains duplicate residue ID "
-                f"{res_id}."
+                f"Shared chain {shared_chain_id!r} contains duplicate residue key "
+                f"{residue_key!r}."
             )
-        groups[res_id] = shared_indices[start:stop]
+        groups[residue_key] = residue_indices
     return groups
+
+
+def _shared_residue_key(
+    atom_array: AtomArray,
+    residue_indices: np.ndarray,
+    fixed_coord_mask: np.ndarray,
+) -> ResidueKey:
+    """Return the typed key used to pair one shared-chain residue across tracks."""
+
+    res_id = int(atom_array.res_id[residue_indices[0]])
+    is_fixed = bool(np.any(fixed_coord_mask[residue_indices]))
+    if not is_fixed:
+        return ("res_id", res_id)
+
+    if "src_component" not in atom_array.get_annotation_categories():
+        return ("res_id", res_id)
+
+    src_components = sorted(
+        {
+            str(src_component)
+            for src_component in atom_array.src_component[residue_indices]
+            if str(src_component)
+        }
+    )
+    if not src_components:
+        return ("res_id", res_id)
+    if len(src_components) != 1:
+        raise ValueError(
+            "Fixed shared-chain residue has multiple src_component labels: "
+            f"{src_components}."
+        )
+    return ("src_component", src_components[0])
 
 
 def _validate_atom_mask_length(
@@ -269,8 +319,56 @@ def _atom_identity_signature(
     ]
 
 
-def _residue_label(shared_chain_id: str, residue_key: int) -> str:
-    return f"{shared_chain_id}{residue_key}"
+def _residue_label(shared_chain_id: str, residue_key: ResidueKey) -> str:
+    key_type, key_value = residue_key
+    if key_type == "src_component":
+        return str(key_value)
+    return f"{shared_chain_id}{key_value}"
+
+
+def _update_residue_metadata(
+    residue_key: ResidueKey,
+    res_name: str,
+    atom_count: int,
+) -> dict[str, object]:
+    key_type, key_value = residue_key
+    if key_type != "res_id":
+        raise ValueError(
+            "Only generated residue-ID keys may be included in the shared update. "
+            f"Got {residue_key!r}."
+        )
+    return {
+        "res_id": int(key_value),
+        "res_name": res_name,
+        "atom_count": int(atom_count),
+    }
+
+
+def _fixed_residue_metadata(
+    track_1_atom_array: AtomArray,
+    track_2_atom_array: AtomArray,
+    idx_1: np.ndarray,
+    idx_2: np.ndarray,
+    residue_key: ResidueKey,
+    res_name_1: str,
+    res_name_2: str,
+) -> dict[str, object]:
+    key_type, key_value = residue_key
+    metadata: dict[str, object] = {}
+    if key_type == "src_component":
+        metadata["src_component"] = str(key_value)
+        metadata["track_1_res_id"] = int(track_1_atom_array.res_id[idx_1[0]])
+        metadata["track_2_res_id"] = int(track_2_atom_array.res_id[idx_2[0]])
+    else:
+        metadata["res_id"] = int(key_value)
+    metadata.update(
+        {
+            "track_1_res_name": res_name_1,
+            "track_2_res_name": res_name_2,
+            "reason": "fixed_motif_context",
+        }
+    )
+    return metadata
 
 
 def relabel_nonshared_chains(

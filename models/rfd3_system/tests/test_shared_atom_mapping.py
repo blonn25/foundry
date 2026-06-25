@@ -28,6 +28,17 @@ def _atom_array(residues):
     return atom_array
 
 
+def _set_src_component(atom_array, chain_id, res_id, src_component):
+    """Annotate one residue with a source motif component label."""
+
+    if "src_component" not in atom_array.get_annotation_categories():
+        atom_array.set_annotation(
+            "src_component",
+            np.full(atom_array.array_length(), "", dtype="U16"),
+        )
+    atom_array.src_component[_residue_mask(atom_array, chain_id, res_id)] = src_component
+
+
 def _empty_masks(atom_array):
     length = atom_array.array_length()
     return np.zeros(length, dtype=bool), np.zeros(length, dtype=bool)
@@ -110,6 +121,91 @@ def test_fixed_shared_variant_residue_is_excluded_from_coupled_update():
             "reason": "fixed_motif_context",
         }
     ]
+
+
+def test_fixed_shared_guideposts_align_by_src_component_when_res_ids_differ():
+    track_1 = _atom_array(
+        [
+            ("A", 1, "ALA", BACKBONE + ("CB",)),
+            ("A", 91, "SEP", BACKBONE + ("CB", "OG", "P", "O1P", "O2P", "O3P")),
+        ]
+    )
+    track_2 = _atom_array(
+        [
+            ("A", 1, "ALA", BACKBONE + ("CB",)),
+            ("A", 101, "SER", BACKBONE + ("CB", "OG")),
+        ]
+    )
+    _set_src_component(track_1, "A", 91, "A240")
+    _set_src_component(track_2, "A", 101, "A240")
+    fixed_coord_1, fixed_seq_1 = _empty_masks(track_1)
+    fixed_coord_2, fixed_seq_2 = _empty_masks(track_2)
+    fixed_coord_1[_residue_mask(track_1, "A", 91)] = True
+    fixed_coord_2[_residue_mask(track_2, "A", 101)] = True
+    fixed_seq_1[_residue_mask(track_1, "A", 91)] = True
+    fixed_seq_2[_residue_mask(track_2, "A", 101)] = True
+
+    atom_map = build_shared_update_atom_map(
+        track_1,
+        track_2,
+        "A",
+        fixed_coord_1,
+        fixed_coord_2,
+        fixed_seq_1,
+        fixed_seq_2,
+    )
+
+    assert atom_map.update_residues == [
+        {"res_id": 1, "res_name": "ALA", "atom_count": 5}
+    ]
+    assert atom_map.excluded_fixed_residues == [
+        {
+            "src_component": "A240",
+            "track_1_res_id": 91,
+            "track_2_res_id": 101,
+            "track_1_res_name": "SEP",
+            "track_2_res_name": "SER",
+            "reason": "fixed_motif_context",
+        }
+    ]
+
+
+def test_src_component_key_does_not_collide_with_generated_res_id():
+    track_1 = _atom_array(
+        [
+            ("A", 237, "ALA", BACKBONE + ("CB",)),
+            ("A", 301, "SER", BACKBONE + ("CB", "OG")),
+        ]
+    )
+    track_2 = _atom_array(
+        [
+            ("A", 237, "ALA", BACKBONE + ("CB",)),
+            ("A", 401, "SEP", BACKBONE + ("CB", "OG", "P")),
+        ]
+    )
+    _set_src_component(track_1, "A", 301, "A237")
+    _set_src_component(track_2, "A", 401, "A237")
+    fixed_coord_1, fixed_seq_1 = _empty_masks(track_1)
+    fixed_coord_2, fixed_seq_2 = _empty_masks(track_2)
+    fixed_coord_1[_residue_mask(track_1, "A", 301)] = True
+    fixed_coord_2[_residue_mask(track_2, "A", 401)] = True
+    fixed_seq_1[_residue_mask(track_1, "A", 301)] = True
+    fixed_seq_2[_residue_mask(track_2, "A", 401)] = True
+
+    atom_map = build_shared_update_atom_map(
+        track_1,
+        track_2,
+        "A",
+        fixed_coord_1,
+        fixed_coord_2,
+        fixed_seq_1,
+        fixed_seq_2,
+    )
+
+    assert atom_map.update_residues == [
+        {"res_id": 237, "res_name": "ALA", "atom_count": 5}
+    ]
+    assert atom_map.excluded_fixed_residues[0]["src_component"] == "A237"
 
 
 def test_non_fixed_shared_variant_residue_fails():

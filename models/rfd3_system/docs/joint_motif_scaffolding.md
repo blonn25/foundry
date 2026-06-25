@@ -84,6 +84,14 @@ This means a fixed A-chain `SER` motif residue in track 1 and a fixed A-chain
 the coupled A update. They influence denoising as context through their
 respective track-specific denoiser calls.
 
+For ordinary generated shared-chain residues, tracks are paired by the generated
+`res_id`. For fixed shared-chain motifs and unindexed guideposts, tracks are
+paired by the RFD3 `src_component` annotation when available, for example
+`A237`. This avoids confusing RFD3's temporary guidepost numbering with source
+motif identity. A generated residue with `res_id=237` and a fixed guidepost with
+`src_component=A237` are kept in separate typed key spaces, so they do not
+collide.
+
 ## Kappa Solve With Motifs
 
 The approximate coupling still computes:
