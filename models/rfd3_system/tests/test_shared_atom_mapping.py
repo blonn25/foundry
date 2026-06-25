@@ -5,6 +5,7 @@ from biotite.structure import AtomArray
 from rfd3_system.system.chains import (
     build_shared_update_atom_map,
     merge_tracks_with_shared_source,
+    relabel_nonshared_chains,
 )
 
 
@@ -37,6 +38,17 @@ def _set_src_component(atom_array, chain_id, res_id, src_component):
             np.full(atom_array.array_length(), "", dtype="U16"),
         )
     atom_array.src_component[_residue_mask(atom_array, chain_id, res_id)] = src_component
+
+
+def _set_unindexed_chain(atom_array, chain_id):
+    """Mark every atom in one chain as an unindexed guidepost."""
+
+    if "is_motif_atom_unindexed" not in atom_array.get_annotation_categories():
+        atom_array.set_annotation(
+            "is_motif_atom_unindexed",
+            np.zeros(atom_array.array_length(), dtype=bool),
+        )
+    atom_array.is_motif_atom_unindexed[atom_array.chain_id == chain_id] = True
 
 
 def _empty_masks(atom_array):
@@ -287,3 +299,18 @@ def test_merged_output_can_choose_track_2_shared_chain_source():
 
     assert merged.chain_id.tolist() == ["A"] * 7 + ["B"] * 4 + ["C"] * 5
     assert merged.res_name[:7].tolist() == ["SEP"] * 7
+
+
+def test_relabel_nonshared_chains_ignores_unindexed_guidepost_chain():
+    atom_array = _atom_array(
+        [
+            ("A", 1, "ALA", BACKBONE + ("CB",)),
+            ("B", 1, "GLY", BACKBONE),
+            ("X1", 1, "GLU", BACKBONE + ("CB", "CG", "CD", "OE1", "OE2")),
+        ]
+    )
+    _set_unindexed_chain(atom_array, "X1")
+
+    relabeled = relabel_nonshared_chains(atom_array, "A", ["C"])
+
+    assert relabeled.chain_id.tolist() == ["A"] * 5 + ["C"] * 4 + ["X1"] * 9

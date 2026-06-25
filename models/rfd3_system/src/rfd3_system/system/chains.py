@@ -409,6 +409,7 @@ def relabel_nonshared_chains(
         chain_id
         for chain_id in ordered_chain_ids(relabeled)
         if chain_id != shared_chain_id
+        and not _is_unindexed_guidepost_chain(relabeled, chain_id)
     ]
     if len(actual_chain_ids) != len(desired_chain_ids):
         raise ValueError(
@@ -442,6 +443,15 @@ def relabel_nonshared_chains(
             desired_chain_id,
         )
     return relabeled
+
+
+def _is_unindexed_guidepost_chain(atom_array: AtomArray, chain_id: str) -> bool:
+    """Return True when a chain contains only unindexed guidepost atoms."""
+
+    if "is_motif_atom_unindexed" not in atom_array.get_annotation_categories():
+        return False
+    mask = atom_array.chain_id == chain_id
+    return bool(np.any(mask) and np.all(atom_array.is_motif_atom_unindexed[mask]))
 
 
 def _relabel_string_annotation(
