@@ -82,7 +82,6 @@ files start with names such as:
 ```text
 rfd3sys_a90_b80_c100_0_track1_model_0.cif.gz
 rfd3sys_a90_b80_c100_0_merged_denoised_model_0.cif.gz
-rfd3sys_a90_b80_c100_0_merged_kappa.svg
 ```
 
 ## Output Behavior
@@ -94,13 +93,10 @@ For A+B/A+C coupled runs, the engine writes:
 - merged outputs containing A+B+C, controlled by
   `merged_output_policy=track1|track2|both|none`;
 - optional track-specific and merged trajectory files;
-- one merged-output kappa SVG plot per diffusion batch;
 - metadata with coupling settings and per-step proxy diagnostics.
 
-The kappa SVG uses normalized `t` values along the x-axis. Values increase from
-0 to 1 as the trajectory moves from noisy states toward the final denoised
-structure. The physical RFD3 noise scale `t_hat` is still recorded in the JSON
-diagnostics for runs that need noise-level interpretation.
+The physical RFD3 noise scale `t_hat` is recorded in the JSON diagnostics for
+runs that need noise-level interpretation.
 
 To create PNG plots after a run, use the Matplotlib post-processing script with
 an environment that has Matplotlib installed. On CoreHPC, `envs/esm` is already

@@ -459,13 +459,25 @@ the implementation falls back to `kappa_raw = 0.5` before clamping.
 
 ## Diagnostic Plot Interpretation
 
-Coupled merged outputs include a batch-level SVG kappa plot:
+Coupled merged outputs save per-step diagnostics in their JSON metadata. To
+create plots, run the post-processing script after inference with a Python
+environment that has Matplotlib installed:
 
-```text
-*_merged_kappa.svg
+```bash
+envs/esm/bin/python \
+  software/foundry/models/rfd3_system/scripts/plot_coupling_diagnostics.py \
+  outputs/foundry/rfd3_system/<run_dir>
 ```
 
-The x-axis tick labels are normalized `t` values. They increase from 0 on the
+This reads the JSON diagnostics and writes one kappa PNG and one proxy-residual
+PNG per diffusion batch:
+
+```text
+*_kappa.png
+*_proxy_residual.png
+```
+
+The kappa plot x-axis uses normalized `t` values. They increase from 0 on the
 left to 1 on the right, matching the direction of the denoising process from
 the noisiest state to the final denoised end. The y-axis is `kappa` in:
 
@@ -482,22 +494,6 @@ Interpretation:
 
 The physical RFD3 noise scale `t_hat` is still saved in JSON diagnostics for
 analysis, but it is not used as the kappa plot x-axis.
-
-For PNG plots, run the post-processing script after inference with a Python
-environment that has Matplotlib installed:
-
-```bash
-envs/esm/bin/python \
-  software/foundry/models/rfd3_system/scripts/plot_coupling_diagnostics.py \
-  outputs/foundry/rfd3_system/<run_dir>
-```
-
-This reads the JSON diagnostics and writes:
-
-```text
-*_kappa.png
-*_proxy_residual.png
-```
 
 If both merged output policies are written, the diagnostics are duplicated in
 the two merged JSON files. The plotter collapses those to one kappa PNG and one
