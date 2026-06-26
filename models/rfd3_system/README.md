@@ -28,6 +28,9 @@ The update-proxy, kappa, and residual equations are summarized in
 [docs/shared_chain_coupling_math.md](docs/shared_chain_coupling_math.md).
 The track-specific motif scaffolding plan and command patterns are documented
 in [docs/joint_motif_scaffolding.md](docs/joint_motif_scaffolding.md).
+The tied ProteinMPNN post-design workflow for separated A+B and A+C sequence
+design is documented in
+[docs/tied_proteinmpnn.md](docs/tied_proteinmpnn.md).
 
 ## Active Layout
 
@@ -38,9 +41,11 @@ tests/                                   Unit and regression tests for the copie
 docs/superdiff_shared_chain.md           Prototype design and validation notes
 docs/shared_chain_coupling_math.md       Coupling equations and diagnostics
 docs/joint_motif_scaffolding.md          Track-specific motif scaffolding notes
+docs/tied_proteinmpnn.md                 Tied ProteinMPNN sequence-design workflow
 docs/examples/superdiff_shared_chain_proxy.yaml
                                           Minimal example override shape
 scripts/plot_coupling_diagnostics.py     Post-run Matplotlib diagnostics plotter
+scripts/build_tied_mpnn_input.py         Build separated A+B / D+C tied-MPNN inputs
 archived/                                Upstream RFD3 docs/assets kept for reference only
 ```
 
