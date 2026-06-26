@@ -108,16 +108,19 @@ envs/esm/bin/python \
   outputs/foundry/rfd3_system/<run_dir>
 ```
 
-The script reads merged-output JSON files and writes PNG plots next to the JSON:
+The script reads any coupled track or merged JSON metadata file for each
+diffusion batch and writes PNG plots next to the chosen JSON:
 
 ```text
 *_kappa.png
 *_proxy_residual.png
 ```
 
-When `merged_output_policy=both`, the two merged JSON files contain the same
-batch-level diagnostics, so the script writes one kappa PNG and one
-proxy-residual PNG per batch rather than one copy per merged output policy.
+Track, merged, and repeated `model_N` JSON files from the same diffusion batch
+contain the same coupling diagnostics. The default output is one batch-level
+kappa PNG and one batch-level proxy-residual PNG, even when
+`merged_output_policy=none`. Use `--model-index N` to create a one-off plot set
+for a single generated model.
 
 During coupled inference, the sampler logs periodic progress lines with the
 step count, normalized `t`, `t_hat`, kappa mean/min/max, and mean absolute

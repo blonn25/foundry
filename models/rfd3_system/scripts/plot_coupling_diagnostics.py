@@ -6,6 +6,7 @@ from __future__ import annotations
 import argparse
 import json
 import os
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 
@@ -55,8 +56,18 @@ def main() -> int:
         "--all-models",
         action="store_true",
         help=(
-            "Plot diagnostics for every model_N JSON. By default, only "
-            "model_0 JSONs are used because diagnostics are batch-level."
+            "Deprecated compatibility flag; ignored. By default the plotter "
+            "writes one batch-level plot set. Use --model-index N for a "
+            "single generated model."
+        ),
+    )
+    parser.add_argument(
+        "--model-index",
+        type=int,
+        default=None,
+        help=(
+            "Optional generated model index to plot as a one-off. By default, "
+            "all diffusion-batch samples are shown together."
         ),
     )
     parser.add_argument(
@@ -73,22 +84,22 @@ def main() -> int:
 
     if args.out_dir is not None:
         args.out_dir.mkdir(parents=True, exist_ok=True)
+    if args.all_models:
+        print("NOTE: --all-models is deprecated and ignored; use --model-index N.")
 
-    plotted_prefixes: set[Path] = set()
+    sources, skipped = _collect_diagnostic_sources(json_paths)
     written = 0
-    skipped = 0
-    for json_path in json_paths:
+    for source in sources:
         try:
-            result = _plot_one_json(
-                json_path,
+            result = _plot_one_source(
+                source,
                 out_dir=args.out_dir,
-                all_models=args.all_models,
+                model_index=args.model_index,
                 dpi=args.dpi,
-                plotted_prefixes=plotted_prefixes,
             )
         except Exception as exc:  # noqa: BLE001 - keep batch plotting robust.
             skipped += 1
-            print(f"SKIP {json_path}: {exc}")
+            print(f"SKIP {source.json_path}: {exc}")
             continue
         if result:
             written += len(result)
@@ -97,7 +108,10 @@ def main() -> int:
         else:
             skipped += 1
 
-    print(f"Done. Wrote {written} plot(s); skipped {skipped} JSON file(s).")
+    print(
+        f"Done. Wrote {written} plot(s) from {len(sources)} batch source(s); "
+        f"skipped {skipped} JSON file(s)."
+    )
     return 0
 
 
@@ -114,34 +128,101 @@ def _iter_json_paths(paths: Iterable[Path], *, recursive: bool) -> Iterable[Path
             print(f"SKIP {path}: not a JSON file or directory")
 
 
-def _plot_one_json(
-    json_path: Path,
-    *,
-    out_dir: Path | None,
-    all_models: bool,
-    dpi: int,
-    plotted_prefixes: set[Path],
-) -> list[Path]:
-    """Create kappa and proxy-residual PNGs for one coupled output JSON."""
+@dataclass(frozen=True)
+class DiagnosticSource:
+    """A single JSON chosen to provide diagnostics for one diffusion batch."""
+
+    json_path: Path
+    plot_prefix: Path
+    source_model_index: int | None
+    coupling: dict
+    diagnostics: dict
+
+
+def _collect_diagnostic_sources(
+    json_paths: Iterable[Path],
+) -> tuple[list[DiagnosticSource], int]:
+    """Choose one coupled diagnostic JSON for each diffusion batch.
+
+    rfd3_system writes identical coupling diagnostics into track and merged JSON
+    files, and also repeats those diagnostics for each model_N output in the
+    same diffusion batch.  Grouping by normalized batch prefix prevents duplicate
+    plot sets when a run writes track1, track2, and merged variants.
+    """
+
+    sources: dict[Path, DiagnosticSource] = {}
+    skipped = 0
+    for json_path in json_paths:
+        try:
+            source = _diagnostic_source_from_json(json_path)
+        except Exception as exc:  # noqa: BLE001 - keep directory scans robust.
+            skipped += 1
+            print(f"SKIP {json_path}: {exc}")
+            continue
+        if source is None:
+            skipped += 1
+            continue
+
+        existing = sources.get(source.plot_prefix)
+        if existing is None or _source_rank(source) < _source_rank(existing):
+            if existing is not None:
+                skipped += 1
+            sources[source.plot_prefix] = source
+        else:
+            skipped += 1
+
+    return list(sources.values()), skipped
+
+
+def _diagnostic_source_from_json(json_path: Path) -> DiagnosticSource | None:
+    """Return a diagnostic source if the JSON contains coupling diagnostics."""
 
     metadata = json.loads(json_path.read_text())
     coupling = metadata.get("coupling", {})
-    output_kind = str(coupling.get("output", ""))
-    if not output_kind.startswith("merged_A_plus_all_partners"):
-        return []
-
     diagnostics = coupling.get("diagnostics", {})
     if not diagnostics:
-        return []
+        return None
 
-    plot_prefix = _plot_prefix_for_json(json_path, all_models=all_models)
-    if plot_prefix is None:
-        return []
+    plot_prefix, source_model_index = _plot_prefix_for_json(json_path)
+    return DiagnosticSource(
+        json_path=json_path,
+        plot_prefix=plot_prefix,
+        source_model_index=source_model_index,
+        coupling=coupling,
+        diagnostics=diagnostics,
+    )
 
+
+def _source_rank(source: DiagnosticSource) -> int:
+    """Prefer merged JSONs, then track 1, then track 2 when duplicates exist."""
+
+    output_kind = str(source.coupling.get("output", ""))
+    model_penalty = 0 if source.source_model_index in (None, 0) else 10
+    if output_kind.startswith("merged_A_plus_all_partners"):
+        return model_penalty
+    if output_kind == "track_1_A_plus_partners":
+        return model_penalty + 1
+    if output_kind == "track_2_A_plus_partners":
+        return model_penalty + 2
+    return model_penalty + 3
+
+
+def _plot_one_source(
+    source: DiagnosticSource,
+    *,
+    out_dir: Path | None,
+    model_index: int | None,
+    dpi: int,
+) -> list[Path]:
+    """Create kappa and proxy-residual PNGs for one diffusion batch."""
+
+    coupling = source.coupling
+    diagnostics = source.diagnostics
+    plot_prefix = source.plot_prefix
+    if model_index is not None:
+        plot_prefix = Path(f"{plot_prefix}_model_{model_index}")
     if out_dir is not None:
         plot_prefix = out_dir / plot_prefix.name
-    if plot_prefix in plotted_prefixes:
-        return []
 
     shared = str(coupling.get("shared_chain_id", "A"))
     track_1_label = _complex_label(shared, coupling.get("complex_1_partners", ["B"]))
@@ -149,7 +230,11 @@ def _plot_one_json(
 
     paths: list[Path] = []
     if "kappa" in diagnostics:
-        kappa = _as_step_sample_array(diagnostics["kappa"], "kappa")
+        kappa, labels = _diagnostic_array_for_model(
+            diagnostics["kappa"],
+            "kappa",
+            model_index,
+        )
         normalized_t = _normalized_t_axis(
             diagnostics.get("normalized_t"),
             kappa.shape[0],
@@ -163,14 +248,16 @@ def _plot_one_json(
             track_2_label=track_2_label,
             kappa_min=float(coupling.get("proxy_kappa_min", -1.0)),
             kappa_max=float(coupling.get("proxy_kappa_max", 2.0)),
+            sample_labels=labels,
             dpi=dpi,
         )
         paths.append(kappa_path)
 
     if "proxy_residual" in diagnostics:
-        residual = _as_step_sample_array(
+        residual, labels = _diagnostic_array_for_model(
             diagnostics["proxy_residual"],
             "proxy_residual",
+            model_index,
         )
         normalized_t = _normalized_t_axis(
             diagnostics.get("normalized_t"),
@@ -183,38 +270,66 @@ def _plot_one_json(
             residual_path,
             normalized_t=normalized_t,
             residual=residual,
+            sample_labels=labels,
             dpi=dpi,
         )
         paths.append(residual_path)
 
-    if paths:
-        plotted_prefixes.add(plot_prefix)
     return paths
 
 
-def _plot_prefix_for_json(json_path: Path, *, all_models: bool) -> Path | None:
-    """Return the batch-level plot prefix for an rfd3_system output JSON."""
+def _plot_prefix_for_json(json_path: Path) -> tuple[Path, int | None]:
+    """Return a normalized batch plot prefix and source model index."""
 
     stem = json_path.with_suffix("")
     marker = "_model_"
     stem_text = str(stem)
     if marker not in stem_text:
-        return stem
+        return _coupling_plot_prefix(stem), None
 
     prefix, suffix = stem_text.rsplit(marker, 1)
-    if suffix == "0" or all_models:
-        return _batch_diagnostic_plot_prefix(Path(prefix))
-    return None
+    try:
+        model_index = int(suffix)
+    except ValueError:
+        return _coupling_plot_prefix(stem), None
+    return _coupling_plot_prefix(Path(prefix)), model_index
 
 
-def _batch_diagnostic_plot_prefix(prefix: Path) -> Path:
-    """Collapse merged_track1/2 metadata files to one batch-level plot prefix."""
+def _coupling_plot_prefix(prefix: Path) -> Path:
+    """Collapse track/merged output variants to one coupling plot prefix."""
 
     prefix_text = str(prefix)
-    for track_suffix in ("_merged_track1", "_merged_track2"):
-        if prefix_text.endswith(track_suffix):
-            return Path(f"{prefix_text[: -len(track_suffix)]}_merged")
+    for output_suffix in (
+        "_merged_track1",
+        "_merged_track2",
+        "_merged",
+        "_track1",
+        "_track2",
+    ):
+        if prefix_text.endswith(output_suffix):
+            return Path(f"{prefix_text[: -len(output_suffix)]}_coupling")
     return prefix
+
+
+def _diagnostic_array_for_model(
+    values,
+    name: str,
+    model_index: int | None,
+) -> tuple[np.ndarray, list[str]]:
+    """Return diagnostic values and labels for a batch or one generated model."""
+
+    array = _as_step_sample_array(values, name)
+    if model_index is None:
+        labels = [f"sample {idx}" for idx in range(array.shape[1])]
+        return array, labels
+    if model_index < 0:
+        raise ValueError(f"model index must be non-negative, got {model_index}")
+    if model_index >= array.shape[1]:
+        raise ValueError(
+            f"model index {model_index} is out of range for {name} "
+            f"diagnostics with {array.shape[1]} sample(s)"
+        )
+    return array[:, model_index : model_index + 1], [f"model {model_index}"]
 
 
 def _as_step_sample_array(values, name: str) -> np.ndarray:
@@ -256,12 +371,13 @@ def _plot_kappa(
     track_2_label: str,
     kappa_min: float,
     kappa_max: float,
+    sample_labels: list[str],
     dpi: int,
 ) -> None:
     """Plot kappa trajectories with track-leaning reference lines."""
 
     fig, ax = plt.subplots(figsize=(8.5, 5.0), constrained_layout=True)
-    _plot_samples(ax, normalized_t, kappa)
+    _plot_samples(ax, normalized_t, kappa, sample_labels)
     ax.axhline(1.0, color="0.35", linestyle="--", linewidth=1.0)
     ax.axhline(0.5, color="0.45", linestyle=":", linewidth=1.2)
     ax.axhline(0.0, color="0.35", linestyle="--", linewidth=1.0)
@@ -317,12 +433,13 @@ def _plot_proxy_residual(
     *,
     normalized_t: np.ndarray,
     residual: np.ndarray,
+    sample_labels: list[str],
     dpi: int,
 ) -> None:
     """Plot post-clamp proxy residual trajectories."""
 
     fig, ax = plt.subplots(figsize=(8.5, 5.0), constrained_layout=True)
-    _plot_samples(ax, normalized_t, residual)
+    _plot_samples(ax, normalized_t, residual, sample_labels)
     ax.axhline(0.0, color="0.35", linestyle="--", linewidth=1.0)
     ax.set_title("Proxy residual over denoising")
     ax.set_xlabel("Normalized denoising progress t (0 = noisiest, 1 = final)")
@@ -347,15 +464,25 @@ def _plot_proxy_residual(
     plt.close(fig)
 
 
-def _plot_samples(ax, normalized_t: np.ndarray, values: np.ndarray) -> None:
+def _plot_samples(
+    ax,
+    normalized_t: np.ndarray,
+    values: np.ndarray,
+    sample_labels: list[str],
+) -> None:
     """Plot one line per diffusion-batch sample."""
 
     for sample_idx in range(values.shape[1]):
+        label = (
+            sample_labels[sample_idx]
+            if sample_idx < len(sample_labels)
+            else f"sample {sample_idx}"
+        )
         ax.plot(
             normalized_t,
             values[:, sample_idx],
             linewidth=1.6,
-            label=f"sample {sample_idx}",
+            label=label,
         )
 
 

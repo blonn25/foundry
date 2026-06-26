@@ -459,9 +459,9 @@ the implementation falls back to `kappa_raw = 0.5` before clamping.
 
 ## Diagnostic Plot Interpretation
 
-Coupled merged outputs save per-step diagnostics in their JSON metadata. To
-create plots, run the post-processing script after inference with a Python
-environment that has Matplotlib installed:
+Coupled track and merged outputs save per-step diagnostics in their JSON
+metadata. To create plots, run the post-processing script after inference with a
+Python environment that has Matplotlib installed:
 
 ```bash
 envs/esm/bin/python \
@@ -469,8 +469,8 @@ envs/esm/bin/python \
   outputs/foundry/rfd3_system/<run_dir>
 ```
 
-This reads the JSON diagnostics and writes one kappa PNG and one proxy-residual
-PNG per diffusion batch:
+This reads any coupled JSON associated with each diffusion batch and writes one
+batch-level kappa PNG and one batch-level proxy-residual PNG by default:
 
 ```text
 *_kappa.png
@@ -495,9 +495,11 @@ Interpretation:
 The physical RFD3 noise scale `t_hat` is still saved in JSON diagnostics for
 analysis, but it is not used as the kappa plot x-axis.
 
-If both merged output policies are written, the diagnostics are duplicated in
-the two merged JSON files. The plotter collapses those to one kappa PNG and one
-proxy-residual PNG per diffusion batch.
+Track, merged, and repeated `model_N` JSON files from the same diffusion batch
+contain duplicated coupling diagnostics. The plotter collapses those to one
+batch-level kappa PNG and one batch-level proxy-residual PNG, so plotting still
+works when `merged_output_policy=none`. Use `--model-index N` to make a one-off
+plot set for a single generated model.
 
 The proxy-residual PNG uses the same normalized `t` x-axis. Its y-axis is the
 post-clamp residual defined above; values closer to zero indicate that the
