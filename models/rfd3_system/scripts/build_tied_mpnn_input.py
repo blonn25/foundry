@@ -71,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--translation-distance",
         type=float,
-        default=500.0,
+        default=50.0,
         help="Distance in Angstroms used to translate the D+C complex away from A+B.",
     )
     parser.add_argument(

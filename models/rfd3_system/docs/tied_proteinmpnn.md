@@ -15,7 +15,7 @@ combined CIF with four chains:
 - `D`: a translated copy of track 2 chain A, renamed from A to D;
 - `C`: track 2 partner chain C, translated with D.
 
-The D+C complex is translated 500 Angstroms along the x-axis by default.  This
+The D+C complex is translated 50 Angstroms along the x-axis by default.  This
 keeps B and C outside each other's ProteinMPNN neighborhood while allowing one
 ProteinMPNN decode to apply tied sequence groups across the two A copies.
 
