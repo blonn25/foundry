@@ -152,6 +152,22 @@ def parse_args() -> argparse.Namespace:
         help="Use legacy checkpoint loading for original ProteinMPNN/LigandMPNN weights.",
     )
     parser.add_argument(
+        "--write-fasta",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help="Write ProteinMPNN FASTA outputs in the generated inference config.",
+    )
+    parser.add_argument(
+        "--write-structures",
+        action=argparse.BooleanOptionalAction,
+        default=True,
+        help=(
+            "Write ProteinMPNN-designed CIF structures in the generated "
+            "inference config. Enabled by default so MPNN outputs include "
+            "both designed sequences and redesigned structures."
+        ),
+    )
+    parser.add_argument(
         "--backbone-rmsd-tolerance",
         type=float,
         default=1e-4,
@@ -501,8 +517,8 @@ def main() -> None:
         "checkpoint_path": args.checkpoint_path,
         "is_legacy_weights": args.is_legacy_weights,
         "out_directory": str(out_dir),
-        "write_fasta": True,
-        "write_structures": True,
+        "write_fasta": args.write_fasta,
+        "write_structures": args.write_structures,
         "inputs": inputs,
     }
     config_path = out_dir / "proteinmpnn_config.json"

@@ -66,6 +66,10 @@ The helper writes:
 - `proteinmpnn_config.json`;
 - `tied_mpnn_manifest.json`.
 
+The generated ProteinMPNN config writes both FASTA sequence outputs and
+redesigned CIF structures by default.  Add `--no-write-structures` if you only
+want FASTA sequence outputs.
+
 The generated config uses Foundry's bundled original ProteinMPNN checkpoint:
 
 ```text
