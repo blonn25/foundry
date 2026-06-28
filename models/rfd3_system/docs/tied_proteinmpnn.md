@@ -15,7 +15,7 @@ combined CIF with four chains:
 - `D`: a translated copy of track 2 chain A, renamed from A to D;
 - `C`: track 2 partner chain C, translated with D.
 
-The D+C complex is translated 50 Angstroms along the x-axis by default.  This
+The D+C complex is translated 100 Angstroms along the x-axis by default.  This
 keeps B and C outside each other's ProteinMPNN neighborhood while allowing one
 ProteinMPNN decode to apply tied sequence groups across the two A copies.
 
@@ -23,6 +23,14 @@ The helper validates that track 1 and track 2 shared-chain A backbone atoms are
 already colocated before mixing track 2 A with track 1 B.  If that check fails,
 the script exits instead of silently writing a geometrically inconsistent A+B
 complex.
+
+Before writing the combined CIF, the helper drops atoms whose coordinates are
+not finite.  This is necessary because AtomWorks may reconstruct missing
+template atoms, especially hydrogens or terminal atoms, with `NaN` coordinates
+when it parses sparse rfd3_system outputs.  Those atoms are not real generated
+coordinates, and writing them explicitly can break PyMOL and downstream
+readers.  The number of dropped atoms is recorded in `tied_mpnn_manifest.json`
+under `combined_atom_filter`.
 
 ## Fixed And Tied Residues
 

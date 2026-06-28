@@ -71,7 +71,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "--translation-distance",
         type=float,
-        default=50.0,
+        default=100.0,
         help="Distance in Angstroms used to translate the D+C complex away from A+B.",
     )
     parser.add_argument(
@@ -312,6 +312,27 @@ def translate(atom_array: AtomArray, vector: np.ndarray) -> AtomArray:
     return translated
 
 
+def keep_finite_coordinate_atoms(atom_array: AtomArray) -> tuple[AtomArray, dict[str, int]]:
+    """Drop template-expanded atoms whose coordinates are not physically present.
+
+    AtomWorks can materialize missing template atoms with NaN coordinates when
+    it parses sparse rfd3_system outputs.  Those atoms should not be written to
+    the combined MPNN input because PyMOL and downstream structure readers may
+    treat explicit NaN coordinates as a corrupted structure.
+    """
+
+    finite_mask = np.isfinite(atom_array.coord).all(axis=1)
+    filtered = atom_array[finite_mask].copy()
+    filtered.bonds = None
+    if "atom_id" in filtered.get_annotation_categories():
+        filtered.del_annotation("atom_id")
+    return filtered, {
+        "input_atom_count": int(len(atom_array)),
+        "written_atom_count": int(len(filtered)),
+        "dropped_nonfinite_atom_count": int((~finite_mask).sum()),
+    }
+
+
 def residue_ids(atom_array: AtomArray, chain_id: str) -> list[int]:
     """Return unique residue IDs for one chain in atom order."""
 
@@ -437,9 +458,7 @@ def build_combined_input(
     c_chain = translate(c_chain, translation)
 
     combined = a_chain + b_chain + d_chain + c_chain
-    combined.bonds = None
-    if "atom_id" in combined.get_annotation_categories():
-        combined.del_annotation("atom_id")
+    combined, finite_filter_stats = keep_finite_coordinate_atoms(combined)
 
     combined_base = combined_dir / f"{name_prefix}_tied_mpnn_model_{pair.model_index}"
     to_cif_file(
@@ -477,6 +496,7 @@ def build_combined_input(
         "combined_cif": str(combined_cif),
         "shared_backbone_rmsd": rmsd,
         "translation_vector": translation.tolist(),
+        "combined_atom_filter": finite_filter_stats,
         "fixed_a_source_residues": fixed_a_sources,
         "fixed_b_source_residues": fixed_b_sources,
         "fixed_residues": fixed_residues,
