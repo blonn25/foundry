@@ -132,6 +132,7 @@ scripts/caliby_exec.sh \
     seq_des_cfg.atom_mpnn.sampling_cfg=/mnt/scratch/group/CX500059_DS1/blonnquist/protein_system_design/software/caliby/caliby/configs/seq_des/inference.yaml \
     sampling_cfg_overrides.num_seqs_per_pdb=3 \
     sampling_cfg_overrides.batch_size=3 \
+    hydra.run.dir=/mnt/scratch/group/CX500059_DS1/blonnquist/protein_system_design/outputs/caliby/<caliby_run_dir>/hydra_outputs \
     out_dir=/mnt/scratch/group/CX500059_DS1/blonnquist/protein_system_design/outputs/caliby/<caliby_run_dir>
 ```
 
