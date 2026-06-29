@@ -1,21 +1,23 @@
 #!/usr/bin/env python3
-"""Build tied ProteinMPNN inputs from paired rfd3_system track outputs.
+"""Build tied sequence-design inputs from paired rfd3_system track outputs.
 
 The intended input is an rfd3_system output directory containing paired
 ``*_track1_model_<i>.cif.gz`` and ``*_track2_model_<i>.cif.gz`` files plus
-their JSON metadata.  For each model, this script writes one combined CIF:
+their JSON metadata.  For each model, this script writes one combined structure:
 
     A + B, D + C
 
 where A is the SER-containing shared chain from track 2, B is the track-1
 partner, D is a translated copy of track-2 A, and C is the translated track-2
-partner.  ProteinMPNN then sees two independent complexes in one file, while
-explicit symmetry groups tie the designed sequence positions in A and D.
+partner.  Downstream sequence-design tools then see two independent complexes
+in one file, while explicit symmetry groups tie the designed sequence positions
+in A and D.
 """
 
 from __future__ import annotations
 
 import argparse
+import csv
 import json
 import re
 from dataclasses import dataclass
@@ -24,7 +26,7 @@ from typing import Any
 
 import numpy as np
 from atomworks.io import parse
-from atomworks.io.utils.io_utils import to_cif_file
+from atomworks.io.utils.io_utils import to_cif_file, to_pdb_string
 from biotite.structure import AtomArray
 
 
@@ -48,8 +50,8 @@ class TrackPair:
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(
         description=(
-            "Create separated A+B and D+C ProteinMPNN inputs from paired "
-            "rfd3_system track outputs, plus a tied-sequence MPNN config."
+            "Create separated A+B and D+C inputs from paired rfd3_system "
+            "track outputs for ProteinMPNN or Caliby sequence design."
         )
     )
     parser.add_argument(
@@ -61,7 +63,16 @@ def parse_args() -> argparse.Namespace:
         "--out-dir",
         type=Path,
         required=True,
-        help="ProteinMPNN output directory; combined inputs and config are written here.",
+        help="Output directory; tool-specific inputs and metadata are written here.",
+    )
+    parser.add_argument(
+        "--prepare-for",
+        choices=["mpnn", "caliby"],
+        default="mpnn",
+        help=(
+            "Output mode. 'mpnn' writes compressed CIFs plus a ProteinMPNN "
+            "config. 'caliby' writes PDBs plus Caliby positional constraints."
+        ),
     )
     parser.add_argument(
         "--name-prefix",
@@ -333,6 +344,13 @@ def keep_finite_coordinate_atoms(atom_array: AtomArray) -> tuple[AtomArray, dict
     }
 
 
+def write_pdb_file(atom_array: AtomArray, path: Path) -> Path:
+    """Write a PDB file using AtomWorks' PDB string conversion."""
+
+    path.write_text(to_pdb_string(atom_array))
+    return path
+
+
 def residue_ids(atom_array: AtomArray, chain_id: str) -> list[int]:
     """Return unique residue IDs for one chain in atom order."""
 
@@ -374,6 +392,14 @@ def mapped_residues(
             + ", ".join(missing)
         )
     return mapped
+
+
+def join_residue_list(residues: list[str]) -> str:
+    return ",".join(residues)
+
+
+def join_symmetry_groups(groups: list[list[str]]) -> str:
+    return "|".join(",".join(group) for group in groups)
 
 
 def shared_backbone_rmsd(
@@ -423,7 +449,7 @@ def build_combined_input(
     combined_dir: Path,
     name_prefix: str,
 ) -> tuple[dict[str, Any], dict[str, Any]]:
-    """Write one combined CIF and return MPNN input config plus manifest entry."""
+    """Write one combined structure and return tool config plus manifest entry."""
 
     track1 = load_atom_array(pair.track1_cif)
     track2 = load_atom_array(pair.track2_cif)
@@ -460,14 +486,19 @@ def build_combined_input(
     combined = a_chain + b_chain + d_chain + c_chain
     combined, finite_filter_stats = keep_finite_coordinate_atoms(combined)
 
-    combined_base = combined_dir / f"{name_prefix}_tied_mpnn_model_{pair.model_index}"
-    to_cif_file(
-        combined,
-        combined_base,
-        file_type="cif.gz",
-        include_entity_poly=False,
-    )
-    combined_cif = combined_base.with_suffix(".cif.gz")
+    combined_base = combined_dir / f"{name_prefix}_tied_{args.prepare_for}_model_{pair.model_index}"
+    if args.prepare_for == "mpnn":
+        to_cif_file(
+            combined,
+            combined_base,
+            file_type="cif.gz",
+            include_entity_poly=False,
+        )
+        combined_structure = combined_base.with_suffix(".cif.gz")
+        combined_key = "combined_cif"
+    else:
+        combined_structure = write_pdb_file(combined, combined_base.with_suffix(".pdb"))
+        combined_key = "combined_pdb"
 
     fixed_a_set = set(fixed_a)
     symmetry_residues = [
@@ -478,7 +509,7 @@ def build_combined_input(
 
     fixed_residues = fixed_a + fixed_d + fixed_b
     input_config = {
-        "structure_path": str(combined_cif),
+        "structure_path": str(combined_structure),
         "name": f"{name_prefix}_model_{pair.model_index}",
         "seed": args.seed,
         "batch_size": args.batch_size,
@@ -493,7 +524,7 @@ def build_combined_input(
         "track1_json": str(pair.track1_json),
         "track2_cif": str(pair.track2_cif),
         "track2_json": str(pair.track2_json),
-        "combined_cif": str(combined_cif),
+        combined_key: str(combined_structure),
         "shared_backbone_rmsd": rmsd,
         "translation_vector": translation.tolist(),
         "combined_atom_filter": finite_filter_stats,
@@ -504,6 +535,56 @@ def build_combined_input(
         "symmetry_residues": symmetry_residues,
     }
     return input_config, manifest_entry
+
+
+def write_mpnn_outputs(out_dir: Path, inputs: list[dict[str, Any]], manifest: dict[str, Any]) -> None:
+    config = {
+        "model_type": manifest["model_type"],
+        "checkpoint_path": manifest["checkpoint_path"],
+        "is_legacy_weights": manifest["is_legacy_weights"],
+        "out_directory": str(out_dir),
+        "write_fasta": manifest["write_fasta"],
+        "write_structures": manifest["write_structures"],
+        "inputs": inputs,
+    }
+    config_path = out_dir / "proteinmpnn_config.json"
+    manifest_path = out_dir / "tied_mpnn_manifest.json"
+    config_path.write_text(json.dumps(config, indent=2) + "\n")
+    mpnn_manifest = {
+        "rfd3_output_dir": manifest["rfd3_output_dir"],
+        "combined_input_dir": manifest["combined_input_dir"],
+        "config_path": str(config_path),
+        "model_count": manifest["model_count"],
+        "entries": manifest["entries"],
+    }
+    manifest_path.write_text(json.dumps(mpnn_manifest, indent=2) + "\n")
+    print(f"Config: {config_path}")
+    print(f"Manifest: {manifest_path}")
+
+
+def write_caliby_outputs(out_dir: Path, manifest: dict[str, Any]) -> None:
+    constraints_path = out_dir / "caliby_constraints.csv"
+    rows: list[dict[str, str]] = []
+    for entry in manifest["entries"]:
+        combined_pdb = Path(entry["combined_pdb"])
+        rows.append(
+            {
+                "pdb_key": combined_pdb.stem,
+                "fixed_pos_seq": join_residue_list(entry["fixed_residues"]),
+                "symmetry_pos": join_symmetry_groups(entry["symmetry_residues"]),
+            }
+        )
+
+    with constraints_path.open("w", newline="") as handle:
+        writer = csv.DictWriter(handle, fieldnames=["pdb_key", "fixed_pos_seq", "symmetry_pos"])
+        writer.writeheader()
+        writer.writerows(rows)
+
+    manifest_path = out_dir / "tied_caliby_manifest.json"
+    manifest["constraints_csv"] = str(constraints_path)
+    manifest_path.write_text(json.dumps(manifest, indent=2) + "\n")
+    print(f"Constraints: {constraints_path}")
+    print(f"Manifest: {manifest_path}")
 
 
 def main() -> None:
@@ -532,35 +613,28 @@ def main() -> None:
         inputs.append(input_config)
         manifest_entries.append(manifest_entry)
 
-    config = {
-        "model_type": args.model_type,
-        "checkpoint_path": args.checkpoint_path,
-        "is_legacy_weights": args.is_legacy_weights,
-        "out_directory": str(out_dir),
-        "write_fasta": args.write_fasta,
-        "write_structures": args.write_structures,
-        "inputs": inputs,
+    manifest = {
+        "prepare_for": args.prepare_for,
+        "rfd3_output_dir": str(output_dir),
+        "combined_input_dir": str(combined_dir),
+        "model_count": len(inputs),
+        "entries": manifest_entries,
     }
-    config_path = out_dir / "proteinmpnn_config.json"
-    manifest_path = out_dir / "tied_mpnn_manifest.json"
-    config_path.write_text(json.dumps(config, indent=2) + "\n")
-    manifest_path.write_text(
-        json.dumps(
+    if args.prepare_for == "mpnn":
+        manifest.update(
             {
-                "rfd3_output_dir": str(output_dir),
-                "combined_input_dir": str(combined_dir),
-                "config_path": str(config_path),
-                "model_count": len(inputs),
-                "entries": manifest_entries,
-            },
-            indent=2,
+                "model_type": args.model_type,
+                "checkpoint_path": args.checkpoint_path,
+                "is_legacy_weights": args.is_legacy_weights,
+                "write_fasta": args.write_fasta,
+                "write_structures": args.write_structures,
+            }
         )
-        + "\n"
-    )
-
-    print(f"Wrote {len(inputs)} combined ProteinMPNN input(s).")
-    print(f"Config: {config_path}")
-    print(f"Manifest: {manifest_path}")
+        write_mpnn_outputs(out_dir, inputs, manifest)
+        print(f"Wrote {len(inputs)} combined ProteinMPNN input(s).")
+    else:
+        write_caliby_outputs(out_dir, manifest)
+        print(f"Wrote {len(inputs)} combined Caliby input(s).")
 
 
 if __name__ == "__main__":
