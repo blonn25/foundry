@@ -139,3 +139,31 @@ scripts/caliby_exec.sh \
 `soluble_caliby_v1` is used for this workflow because it was trained on
 monomers and interfaces.  Do not override `input_cfg.pdb_name_list`; Caliby will
 use all generated PDBs in `combined_inputs/`.
+
+## ESMFold2 Command
+
+After Caliby writes `seq_des_outputs.csv`, fold the designed sequences with the
+local/offline ESMFold2 installation:
+
+```bash
+scripts/esm_exec.sh \
+  python software/foundry/models/rfd3_system/scripts/fold_caliby_esmfold2.py \
+    /mnt/scratch/group/CX500059_DS1/blonnquist/protein_system_design/outputs/caliby/<caliby_run_dir> \
+    --out-dir /mnt/scratch/group/CX500059_DS1/blonnquist/protein_system_design/outputs/esm/<esmfold2_run_dir> \
+    --model esmfold2 \
+    --top-n-per-model all \
+    --sep-source-residue A240
+```
+
+The helper reads Caliby's `A:B:C:D` sequence order and creates two ESMFold2
+folds for each selected Caliby row:
+
+- `A+B`, where chain A carries an ESMFold2 `SEP` modification at the
+  A240-derived final residue position;
+- `D+C`, where D is the tied copy of A and remains the unphosphorylated SER
+  variant.
+
+Use `--top-n-per-model <N>` to fold only the best N Caliby rows per rfd3_system
+model by ascending Caliby `U`.  Omit ESMFold2 inference overrides to use the
+model defaults, or pass options such as `--num-loops`, `--num-sampling-steps`,
+and `--num-diffusion-samples` for faster validation runs.
