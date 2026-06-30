@@ -246,17 +246,11 @@ def collect_pae_metrics(sample_result: Any, task: FoldTask) -> dict[str, Any]:
         if metric.ndim != 2 or metric.shape[0] != metric.shape[1]:
             return metrics
 
-        chain_labels = np.asarray(
-            [
-                chain_id
-                for chain_id, sequence in task.chains.items()
-                for _ in range(len(sequence))
-            ]
-        )
-        if metric.shape[0] != chain_labels.size:
+        group_labels = pae_group_labels(sample_result, task, metric.shape[0])
+        if group_labels is None:
             return metrics
 
-        inter_chain_mask = chain_labels[:, None] != chain_labels[None, :]
+        inter_chain_mask = group_labels[:, None] != group_labels[None, :]
         inter_chain_values = metric[inter_chain_mask]
         finite_inter_chain_values = inter_chain_values[
             np.isfinite(inter_chain_values)
@@ -265,6 +259,56 @@ def collect_pae_metrics(sample_result: Any, task: FoldTask) -> dict[str, Any]:
             metrics["mean_ipae"] = float(finite_inter_chain_values.mean())
         return metrics
     return {}
+
+
+def pae_group_labels(
+    sample_result: Any,
+    task: FoldTask,
+    pae_length: int,
+) -> Any | None:
+    """Return token labels for inter-chain PAE aggregation.
+
+    SEP and other modified residues can be represented by multiple ESMFold2
+    tokens even though they collapse back to one output residue.  Prefer labels
+    returned by ESMFold2 when they match the PAE matrix length; fall back to the
+    plain input-chain sequence lengths for unmodified folds.
+    """
+
+    import numpy as np
+
+    complex_chain_id = getattr(
+        getattr(sample_result, "complex", None),
+        "chain_id",
+        None,
+    )
+    if complex_chain_id is not None and len(complex_chain_id) == pae_length:
+        labels = np.asarray(complex_chain_id)
+        if np.unique(labels).size > 1:
+            return labels
+
+    entity_id = getattr(sample_result, "entity_id", None)
+    if entity_id is not None:
+        try:
+            labels = metric_to_numpy(entity_id).astype(int)
+        except (TypeError, ValueError):
+            labels = None
+        if (
+            labels is not None
+            and labels.size == pae_length
+            and np.unique(labels).size > 1
+        ):
+            return labels
+
+    labels = np.asarray(
+        [
+            chain_id
+            for chain_id, sequence in task.chains.items()
+            for _ in range(len(sequence))
+        ]
+    )
+    if labels.size == pae_length and np.unique(labels).size > 1:
+        return labels
+    return None
 
 
 def parse_source_residue(value: str) -> tuple[str, int]:
