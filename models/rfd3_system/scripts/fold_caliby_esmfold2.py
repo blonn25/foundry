@@ -35,6 +35,12 @@ MODEL_REPOS = {
 ESMC_REPO = "biohub/ESMC-6B"
 SOURCE_RESIDUE_RE = re.compile(r"^(?P<chain>[A-Za-z])(?P<resid>\d+)$")
 SAMPLE_RE = re.compile(r"_sample(?P<sample>\d+)(?:\.[^.]+)*(?:\.gz)?$")
+PAE_ATTRIBUTE_CANDIDATES = (
+    "pae",
+    "predicted_aligned_error",
+    "aligned_error",
+    "predicted_tm_aligned_error",
+)
 
 
 @dataclass(frozen=True)
@@ -194,6 +200,66 @@ def read_json(path: Path) -> dict[str, Any]:
 def write_json(path: Path, payload: dict[str, Any]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def metric_to_numpy(value: Any):
+    """Convert tensor-like confidence metrics to a NumPy array when possible."""
+
+    import numpy as np
+
+    if value is None:
+        raise TypeError("metric is None")
+    if callable(value):
+        raise TypeError("metric is callable")
+    if hasattr(value, "detach"):
+        value = value.detach().cpu()
+    if hasattr(value, "numpy"):
+        value = value.numpy()
+    return np.asarray(value, dtype=float)
+
+
+def collect_pae_metrics(
+    sample_result: Any,
+    out_dir: Path,
+    task_id: str,
+    suffix: str,
+) -> dict[str, Any]:
+    """Save PAE-like metrics if the ESMFold2 result object exposes them."""
+
+    import numpy as np
+
+    for attr_name in PAE_ATTRIBUTE_CANDIDATES:
+        if not hasattr(sample_result, attr_name):
+            continue
+        try:
+            metric = metric_to_numpy(getattr(sample_result, attr_name))
+        except (TypeError, ValueError):
+            continue
+        if metric.size == 0:
+            continue
+
+        finite_values = metric[np.isfinite(metric)]
+        if finite_values.size == 0:
+            continue
+
+        pae_path = out_dir / f"{task_id}{suffix}_pae.json"
+        write_json(
+            pae_path,
+            {
+                "metric_name": attr_name,
+                "shape": list(metric.shape),
+                "values": metric.tolist(),
+            },
+        )
+        return {
+            "pae_metric_name": attr_name,
+            "pae_shape": list(metric.shape),
+            "pae_json": str(pae_path),
+            "pae_mean": float(finite_values.mean()),
+            "pae_min": float(finite_values.min()),
+            "pae_max": float(finite_values.max()),
+        }
+    return {}
 
 
 def parse_source_residue(value: str) -> tuple[str, int]:
@@ -527,12 +593,14 @@ def run_fold(task: FoldTask, model: Any, model_key: str, repo_id: str, out_dir: 
         cif_path = out_dir / f"{task.task_id}{suffix}.cif"
         cif_path.write_text(sample_result.complex.to_mmcif())
         cif_paths.append(str(cif_path))
+        pae_metrics = collect_pae_metrics(sample_result, out_dir, task.task_id, suffix)
         sample_summaries.append(
             {
                 "cif": str(cif_path),
                 "plddt_mean": float(sample_result.plddt.mean()),
                 "ptm": float(sample_result.ptm),
                 "iptm": float(sample_result.iptm),
+                **pae_metrics,
             }
         )
 
