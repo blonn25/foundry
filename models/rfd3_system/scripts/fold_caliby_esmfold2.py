@@ -218,13 +218,13 @@ def metric_to_numpy(value: Any):
     return np.asarray(value, dtype=float)
 
 
-def collect_pae_metrics(
-    sample_result: Any,
-    out_dir: Path,
-    task_id: str,
-    suffix: str,
-) -> dict[str, Any]:
-    """Save PAE-like metrics if the ESMFold2 result object exposes them."""
+def collect_pae_metrics(sample_result: Any, task: FoldTask) -> dict[str, Any]:
+    """Return aggregate PAE metrics if ESMFold2 exposes a PAE matrix.
+
+    ``mean_pae`` averages all finite entries in the PAE matrix. ``mean_ipae``
+    averages only residue pairs assigned to different chains, which makes it a
+    compact proxy for confidence in the relative placement of the two chains.
+    """
 
     import numpy as np
 
@@ -242,23 +242,28 @@ def collect_pae_metrics(
         if finite_values.size == 0:
             continue
 
-        pae_path = out_dir / f"{task_id}{suffix}_pae.json"
-        write_json(
-            pae_path,
-            {
-                "metric_name": attr_name,
-                "shape": list(metric.shape),
-                "values": metric.tolist(),
-            },
+        metrics = {"mean_pae": float(finite_values.mean())}
+        if metric.ndim != 2 or metric.shape[0] != metric.shape[1]:
+            return metrics
+
+        chain_labels = np.asarray(
+            [
+                chain_id
+                for chain_id, sequence in task.chains.items()
+                for _ in range(len(sequence))
+            ]
         )
-        return {
-            "pae_metric_name": attr_name,
-            "pae_shape": list(metric.shape),
-            "pae_json": str(pae_path),
-            "pae_mean": float(finite_values.mean()),
-            "pae_min": float(finite_values.min()),
-            "pae_max": float(finite_values.max()),
-        }
+        if metric.shape[0] != chain_labels.size:
+            return metrics
+
+        inter_chain_mask = chain_labels[:, None] != chain_labels[None, :]
+        inter_chain_values = metric[inter_chain_mask]
+        finite_inter_chain_values = inter_chain_values[
+            np.isfinite(inter_chain_values)
+        ]
+        if finite_inter_chain_values.size:
+            metrics["mean_ipae"] = float(finite_inter_chain_values.mean())
+        return metrics
     return {}
 
 
@@ -593,7 +598,7 @@ def run_fold(task: FoldTask, model: Any, model_key: str, repo_id: str, out_dir: 
         cif_path = out_dir / f"{task.task_id}{suffix}.cif"
         cif_path.write_text(sample_result.complex.to_mmcif())
         cif_paths.append(str(cif_path))
-        pae_metrics = collect_pae_metrics(sample_result, out_dir, task.task_id, suffix)
+        pae_metrics = collect_pae_metrics(sample_result, task)
         sample_summaries.append(
             {
                 "cif": str(cif_path),
