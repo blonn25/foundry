@@ -5,7 +5,9 @@ from biotite.structure import AtomArray
 from rfd3_system.system.chains import (
     build_shared_update_atom_map,
     merge_tracks_with_shared_source,
+    normalize_kappa_atom_subset,
     relabel_nonshared_chains,
+    select_kappa_solve_atom_indices,
 )
 
 
@@ -90,6 +92,118 @@ def test_non_fixed_shared_residues_map_all_matching_atoms():
     assert atom_map.update_indices_2.tolist() == list(range(track_2.array_length()))
     assert len(atom_map.update_residues) == 2
     assert atom_map.excluded_fixed_residues == []
+
+
+def test_kappa_subset_all_uses_full_shared_update_map():
+    track_1 = _atom_array([("A", 1, "ALA", BACKBONE + ("CB",))])
+    track_2 = _atom_array([("A", 1, "ALA", BACKBONE + ("CB",))])
+    fixed_coord_1, fixed_seq_1 = _empty_masks(track_1)
+    fixed_coord_2, fixed_seq_2 = _empty_masks(track_2)
+    atom_map = build_shared_update_atom_map(
+        track_1,
+        track_2,
+        "A",
+        fixed_coord_1,
+        fixed_coord_2,
+        fixed_seq_1,
+        fixed_seq_2,
+    )
+
+    kappa_1, kappa_2 = select_kappa_solve_atom_indices(
+        atom_map,
+        track_1,
+        track_2,
+        "ALL",
+    )
+
+    assert kappa_1.tolist() == atom_map.update_indices_1.tolist()
+    assert kappa_2.tolist() == atom_map.update_indices_2.tolist()
+
+
+def test_kappa_subset_bkbn_selects_backbone_atoms_only():
+    track_1 = _atom_array([("A", 1, "ARG", BACKBONE + ("CB", "CG", "CD"))])
+    track_2 = _atom_array([("A", 1, "ARG", BACKBONE + ("CB", "CG", "CD"))])
+    fixed_coord_1, fixed_seq_1 = _empty_masks(track_1)
+    fixed_coord_2, fixed_seq_2 = _empty_masks(track_2)
+    atom_map = build_shared_update_atom_map(
+        track_1,
+        track_2,
+        "A",
+        fixed_coord_1,
+        fixed_coord_2,
+        fixed_seq_1,
+        fixed_seq_2,
+    )
+
+    kappa_1, kappa_2 = select_kappa_solve_atom_indices(
+        atom_map,
+        track_1,
+        track_2,
+        "BKBN",
+    )
+
+    assert track_1.atom_name[kappa_1].tolist() == list(BACKBONE)
+    assert track_2.atom_name[kappa_2].tolist() == list(BACKBONE)
+
+
+def test_kappa_subset_ca_selects_ca_atoms_only():
+    track_1 = _atom_array(
+        [
+            ("A", 1, "ALA", BACKBONE + ("CB",)),
+            ("A", 2, "GLY", BACKBONE),
+        ]
+    )
+    track_2 = _atom_array(
+        [
+            ("A", 1, "ALA", BACKBONE + ("CB",)),
+            ("A", 2, "GLY", BACKBONE),
+        ]
+    )
+    fixed_coord_1, fixed_seq_1 = _empty_masks(track_1)
+    fixed_coord_2, fixed_seq_2 = _empty_masks(track_2)
+    atom_map = build_shared_update_atom_map(
+        track_1,
+        track_2,
+        "A",
+        fixed_coord_1,
+        fixed_coord_2,
+        fixed_seq_1,
+        fixed_seq_2,
+    )
+
+    kappa_1, kappa_2 = select_kappa_solve_atom_indices(
+        atom_map,
+        track_1,
+        track_2,
+        "CA",
+    )
+
+    assert track_1.atom_name[kappa_1].tolist() == ["CA", "CA"]
+    assert track_2.atom_name[kappa_2].tolist() == ["CA", "CA"]
+
+
+def test_kappa_subset_rejects_invalid_name():
+    with pytest.raises(ValueError, match="ALL, BKBN, CA"):
+        normalize_kappa_atom_subset("backbone")
+
+
+def test_kappa_subset_fails_when_no_atoms_match():
+    track_1 = _atom_array([("A", 1, "UNK", ("CB", "CG"))])
+    track_2 = _atom_array([("A", 1, "UNK", ("CB", "CG"))])
+    fixed_coord_1, fixed_seq_1 = _empty_masks(track_1)
+    fixed_coord_2, fixed_seq_2 = _empty_masks(track_2)
+    atom_map = build_shared_update_atom_map(
+        track_1,
+        track_2,
+        "A",
+        fixed_coord_1,
+        fixed_coord_2,
+        fixed_seq_1,
+        fixed_seq_2,
+    )
+
+    with pytest.raises(ValueError, match="selected no atoms"):
+        select_kappa_solve_atom_indices(atom_map, track_1, track_2, "CA")
 
 
 def test_fixed_shared_variant_residue_is_excluded_from_coupled_update():

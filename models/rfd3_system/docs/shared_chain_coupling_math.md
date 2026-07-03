@@ -270,12 +270,20 @@ where:
 
 - `delta_i` is the shared-chain update proxy from track `i`;
 - `delta_mix` is the proposed mixed shared-chain update;
-- `<., .>` is the sum of coordinate-wise products over all shared-chain atoms;
+- `<., .>` is the sum of coordinate-wise products over the atoms selected for
+  the kappa solve;
 - `||.||^2` is the corresponding squared norm;
 - `w = proxy_norm_weight`, currently `1.0`.
 
 The vector `delta_i` is the score-like denoising update proxy. The scalar
 `proxy_i(delta_mix)` is the quantity that is equalized between tracks.
+
+The default kappa atom subset is `ALL`, which uses every non-fixed shared-chain
+atom and preserves the original prototype behavior. The optional
+`inference_sampler.kappa_atom_subset=BKBN` and `CA` modes solve `kappa` using
+only backbone atoms (`N`, `CA`, `C`, `O`) or only `CA` atoms, respectively.
+These modes change the proxy equation and diagnostics only; the resulting
+scalar `kappa` is still applied to the full non-fixed shared-chain update.
 
 ## Kappa Solve
 
@@ -406,13 +414,14 @@ The clamped range allows extrapolation beyond a convex average. For example:
 After solving for `kappa`, the shared-chain update is:
 
 ```text
-delta_A_mix = kappa * delta_A_1 + (1 - kappa) * delta_A_2
+kappa = solve_proxy(delta_A_1_subset, delta_A_2_subset)
+delta_A_mix_all = kappa * delta_A_1_all + (1 - kappa) * delta_A_2_all
 ```
 
 RFD3's sampler then applies:
 
 ```text
-A_next = A_noisy + step_scale * d_t * delta_A_mix
+A_next_all = A_noisy_all + step_scale * d_t * delta_A_mix_all
 ```
 
 The non-shared partner chains are updated normally by their own tracks:

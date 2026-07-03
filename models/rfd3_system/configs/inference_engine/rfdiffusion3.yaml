@@ -47,6 +47,7 @@ inference_sampler:
   gamma_0: 0.6  # Previously 1.0  | 0.0 for ODE sampling
   gamma_min: 1.0
   s_jitter_origin: 0.0  # Sigma of gaussian noise to jitter the motif offset (equivalent to ORI token Jitter)
+  kappa_atom_subset: ALL  # rfd3_system only: ALL, BKBN, or CA atoms used to solve kappa
 
 #########################################################
 # Approximate shared-chain coupling prototype.

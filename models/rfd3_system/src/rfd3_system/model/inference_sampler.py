@@ -8,6 +8,7 @@ import torch
 from jaxtyping import Float
 from rfd3_system.inference.symmetry.symmetry_utils import apply_symmetry_to_xyz_atomwise
 from rfd3_system.model.cfg_utils import strip_X
+from rfd3_system.system.chains import normalize_kappa_atom_subset
 from rfd3_system.system.proxy import solve_two_track_proxy_kappa
 
 from foundry.common import exists
@@ -640,6 +641,7 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
         proxy_kappa_min: float = -1.0,
         proxy_kappa_max: float = 2.0,
         proxy_eps: float = 1e-8,
+        kappa_atom_subset: str = "ALL",
         **kwargs,
     ):
         super().__init__(**kwargs)
@@ -647,6 +649,7 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
         self.proxy_kappa_min = proxy_kappa_min
         self.proxy_kappa_max = proxy_kappa_max
         self.proxy_eps = proxy_eps
+        self.kappa_atom_subset = normalize_kappa_atom_subset(kappa_atom_subset)
 
     def sample_diffusion_like_af3(self, **_):
         raise ValueError(
@@ -677,6 +680,8 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
         track_2: dict[str, Any],
         shared_update_atom_indices_1: torch.Tensor,
         shared_update_atom_indices_2: torch.Tensor,
+        shared_kappa_atom_indices_1: torch.Tensor | None = None,
+        shared_kappa_atom_indices_2: torch.Tensor | None = None,
         diffusion_module: torch.nn.Module,
         diffusion_batch_size: int,
         coupling_metadata: dict[str, Any],
@@ -699,9 +704,25 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
         shared_update_atom_indices_2 = shared_update_atom_indices_2.to(
             device=device, dtype=torch.long
         )
+        if shared_kappa_atom_indices_1 is None:
+            shared_kappa_atom_indices_1 = shared_update_atom_indices_1
+        else:
+            shared_kappa_atom_indices_1 = shared_kappa_atom_indices_1.to(
+                device=device, dtype=torch.long
+            )
+        if shared_kappa_atom_indices_2 is None:
+            shared_kappa_atom_indices_2 = shared_update_atom_indices_2
+        else:
+            shared_kappa_atom_indices_2 = shared_kappa_atom_indices_2.to(
+                device=device, dtype=torch.long
+            )
         if shared_update_atom_indices_1.numel() == 0:
             raise ValueError(
                 "No non-fixed shared-chain atoms were provided for coupled denoising."
+            )
+        if shared_kappa_atom_indices_1.numel() == 0:
+            raise ValueError(
+                "No non-fixed shared-chain atoms were provided for the kappa solve."
             )
         fixed_1 = f1["is_motif_atom_with_fixed_coord"].to(device=device, dtype=torch.bool)
         fixed_2 = f2["is_motif_atom_with_fixed_coord"].to(device=device, dtype=torch.bool)
@@ -710,11 +731,20 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
             raise ValueError(
                 "Shared update atom index arrays must have the same shape."
             )
+        if shared_kappa_atom_indices_1.shape != shared_kappa_atom_indices_2.shape:
+            raise ValueError("Shared kappa atom index arrays must have the same shape.")
         if torch.any(fixed_1[shared_update_atom_indices_1]) or torch.any(
             fixed_2[shared_update_atom_indices_2]
         ):
             raise ValueError(
                 "Shared update atom indices include fixed motif atoms. Fixed "
+                "motifs must be excluded from the coupled kappa solve."
+            )
+        if torch.any(fixed_1[shared_kappa_atom_indices_1]) or torch.any(
+            fixed_2[shared_kappa_atom_indices_2]
+        ):
+            raise ValueError(
+                "Shared kappa atom indices include fixed motif atoms. Fixed "
                 "motifs must be excluded from the coupled kappa solve."
             )
 
@@ -746,7 +776,10 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
         progress_interval = max(1, n_update_steps // 20)
         ranked_logger.info(
             "Starting rfd3_system shared-chain coupled denoising: "
-            f"{n_update_steps} steps, diffusion_batch_size={D}."
+            f"{n_update_steps} steps, diffusion_batch_size={D}, "
+            f"kappa_atom_subset={self.kappa_atom_subset}, "
+            f"kappa_solve_atoms={shared_kappa_atom_indices_1.numel()}, "
+            f"shared_update_atoms={shared_update_atom_indices_1.numel()}."
         )
 
         X1_L = self._get_initial_structure(
@@ -852,10 +885,12 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
             delta_2 = (X2_noisy_L - X2_denoised_L) / t_hat
             delta_A_1 = delta_1[:, shared_update_atom_indices_1, :]
             delta_A_2 = delta_2[:, shared_update_atom_indices_2, :]
+            delta_A_1_kappa = delta_1[:, shared_kappa_atom_indices_1, :]
+            delta_A_2_kappa = delta_2[:, shared_kappa_atom_indices_2, :]
 
             diag = solve_two_track_proxy_kappa(
-                delta_A_1,
-                delta_A_2,
+                delta_A_1_kappa,
+                delta_A_2_kappa,
                 norm_weight=self.proxy_norm_weight,
                 kappa_min=self.proxy_kappa_min,
                 kappa_max=self.proxy_kappa_max,
@@ -933,6 +968,9 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
             "proxy_kappa_min": self.proxy_kappa_min,
             "proxy_kappa_max": self.proxy_kappa_max,
             "proxy_eps": self.proxy_eps,
+            "kappa_atom_subset": self.kappa_atom_subset,
+            "kappa_solve_atom_count": int(shared_kappa_atom_indices_1.numel()),
+            "shared_update_atom_count": int(shared_update_atom_indices_1.numel()),
             "diagnostics": proxy_diag,
         }
 

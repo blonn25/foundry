@@ -33,7 +33,9 @@ from rfd3_system.system.chains import (
     build_shared_update_atom_map,
     chain_mask,
     merge_tracks_with_shared_source,
+    normalize_kappa_atom_subset,
     relabel_nonshared_chains,
+    select_kappa_solve_atom_indices,
     subset_by_chains,
 )
 from rfd3_system.utils.inference import (
@@ -467,6 +469,15 @@ class RFD3InferenceEngine(BaseInferenceEngine):
             self._feature_mask_np(track_1_output, "is_motif_atom_with_fixed_seq"),
             self._feature_mask_np(track_2_output, "is_motif_atom_with_fixed_seq"),
         )
+        kappa_atom_subset = normalize_kappa_atom_subset(
+            self.inference_sampler_overrides.get("kappa_atom_subset", "ALL")
+        )
+        kappa_indices_1_np, kappa_indices_2_np = select_kappa_solve_atom_indices(
+            shared_atom_map,
+            track_1_output["atom_array"],
+            track_2_output["atom_array"],
+            kappa_atom_subset,
+        )
         self._validate_shared_initial_coordinates(
             track_1_output,
             track_2_output,
@@ -488,6 +499,16 @@ class RFD3InferenceEngine(BaseInferenceEngine):
                 dtype=torch.long,
                 device=device,
             )
+            kappa_indices_1 = torch.as_tensor(
+                kappa_indices_1_np,
+                dtype=torch.long,
+                device=device,
+            )
+            kappa_indices_2 = torch.as_tensor(
+                kappa_indices_2_np,
+                dtype=torch.long,
+                device=device,
+            )
 
             model = self._get_forward_coupled_model(self.trainer.state["model"])
             network_output = model.forward_coupled(
@@ -501,7 +522,13 @@ class RFD3InferenceEngine(BaseInferenceEngine):
                 ],
                 shared_update_atom_indices_1=shared_indices_1,
                 shared_update_atom_indices_2=shared_indices_2,
-                coupling_metadata=self._base_coupling_metadata(shared_atom_map),
+                shared_kappa_atom_indices_1=kappa_indices_1,
+                shared_kappa_atom_indices_2=kappa_indices_2,
+                coupling_metadata=self._base_coupling_metadata(
+                    shared_atom_map,
+                    kappa_atom_subset,
+                    int(kappa_indices_1_np.size),
+                ),
             )
 
         track_1_arrays, track_1_metadata = self.trainer._build_predicted_atom_array_stack(
@@ -765,7 +792,12 @@ class RFD3InferenceEngine(BaseInferenceEngine):
             )
         return mask
 
-    def _base_coupling_metadata(self, shared_atom_map) -> dict:
+    def _base_coupling_metadata(
+        self,
+        shared_atom_map,
+        kappa_atom_subset: str,
+        kappa_solve_atom_count: int,
+    ) -> dict:
         sequence_policy = (
             "Track-specific sequence logits are left uncoupled. Merged outputs "
             f"are controlled by merged_output_policy={self.merged_output_policy!r}."
@@ -779,6 +811,13 @@ class RFD3InferenceEngine(BaseInferenceEngine):
             "implementation": "approximate denoiser-delta proxy",
             "superdiff_exact": False,
             "sequence_policy": sequence_policy,
+            "kappa_atom_subset": kappa_atom_subset,
+            "kappa_solve_atom_count": int(kappa_solve_atom_count),
+            "kappa_solve_policy": (
+                "kappa is solved on kappa_atom_subset atoms; the resulting "
+                "scalar kappa mixes and updates all non-fixed shared-chain "
+                "atoms in the shared update map."
+            ),
             "shared_atom_mapping": shared_atom_map.to_metadata(),
         }
 

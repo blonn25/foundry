@@ -9,6 +9,8 @@ import numpy as np
 from biotite.structure import AtomArray, get_residue_starts
 
 ResidueKey = tuple[str, int | str]
+KAPPA_ATOM_SUBSETS = {"ALL", "BKBN", "CA"}
+BACKBONE_ATOM_NAMES = frozenset({"N", "CA", "C", "O"})
 
 
 @dataclass(frozen=True)
@@ -233,6 +235,61 @@ def build_shared_update_atom_map(
         update_residues=update_residues,
         excluded_fixed_residues=excluded_fixed_residues,
     )
+
+
+def normalize_kappa_atom_subset(atom_subset: str) -> str:
+    """Normalize and validate the atom subset used for the kappa solve."""
+
+    normalized = str(atom_subset).upper()
+    if normalized not in KAPPA_ATOM_SUBSETS:
+        raise ValueError(
+            "kappa_atom_subset must be one of: ALL, BKBN, CA. "
+            f"Received {atom_subset!r}."
+        )
+    return normalized
+
+
+def select_kappa_solve_atom_indices(
+    shared_atom_map: SharedAtomMap,
+    track_1_atom_array: AtomArray,
+    track_2_atom_array: AtomArray,
+    atom_subset: str,
+) -> tuple[np.ndarray, np.ndarray]:
+    """Return paired shared-chain atom indices used only for solving kappa.
+
+    The full shared update map remains responsible for shared noise and the
+    final mixed coordinate update.  This helper selects a smaller paired view
+    for the proxy equation when requested.
+    """
+
+    atom_subset = normalize_kappa_atom_subset(atom_subset)
+    update_indices_1 = np.asarray(shared_atom_map.update_indices_1, dtype=np.int64)
+    update_indices_2 = np.asarray(shared_atom_map.update_indices_2, dtype=np.int64)
+    if update_indices_1.shape != update_indices_2.shape:
+        raise ValueError("Shared update atom index arrays must have matching shapes.")
+
+    atom_names_1 = np.asarray(track_1_atom_array.atom_name[update_indices_1], dtype=str)
+    atom_names_2 = np.asarray(track_2_atom_array.atom_name[update_indices_2], dtype=str)
+    if atom_names_1.tolist() != atom_names_2.tolist():
+        raise ValueError(
+            "Paired shared-chain update atoms have different atom-name ordering; "
+            "cannot select a kappa solve subset safely."
+        )
+
+    if atom_subset == "ALL":
+        subset_mask = np.ones(update_indices_1.shape, dtype=bool)
+    elif atom_subset == "BKBN":
+        subset_mask = np.isin(atom_names_1, list(BACKBONE_ATOM_NAMES))
+    else:  # atom_subset == "CA"
+        subset_mask = atom_names_1 == "CA"
+
+    if not np.any(subset_mask):
+        raise ValueError(
+            f"kappa_atom_subset={atom_subset} selected no atoms from the "
+            "non-fixed shared-chain update map."
+        )
+
+    return update_indices_1[subset_mask], update_indices_2[subset_mask]
 
 
 def _shared_residue_groups(

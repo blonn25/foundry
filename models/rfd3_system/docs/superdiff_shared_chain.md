@@ -79,11 +79,13 @@ score-like update proxy for the shared chain A:
 4. Run the RFD3 denoiser once per track.
 5. Extract A updates, `delta_A_ab` and `delta_A_ac`.
 6. Estimate adaptive weights from the two proxy vectors with a stabilized
-   SuperDiff-inspired two-track solve.
+   SuperDiff-inspired two-track solve. By default this solve uses all non-fixed
+   shared-chain atoms; `inference_sampler.kappa_atom_subset=BKBN` or `CA` can
+   restrict only the kappa solve to backbone or CA atoms.
 7. Clamp weights to a configured range and fall back to equal weighting when
    the proxy system is degenerate.
-8. Update A with the weighted proxy update, while updating B and C with their
-   normal per-track updates.
+8. Update all non-fixed A atoms with the weighted proxy update, while updating
+   B and C with their normal per-track updates.
 9. Relabel track 2's non-shared partner chains back to the user-facing global
    chain IDs before output formatting.
 10. Write A+B, A+C, merged A+B+C, trajectory outputs, and metadata containing

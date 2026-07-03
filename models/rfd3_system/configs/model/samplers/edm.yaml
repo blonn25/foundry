@@ -12,6 +12,7 @@ gamma_0: 0.8
 gamma_min: 1.0
 noise_scale: 1.003
 step_scale: 1.5
+kappa_atom_subset: ALL
 allow_realignment: False
 use_classifier_free_guidance: False
 cfg_scale: 1.5

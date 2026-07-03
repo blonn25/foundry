@@ -45,3 +45,25 @@ def test_proxy_kappa_clamps_extreme_weights():
 
     assert diagnostics.raw_kappa.item() > 1.0
     assert diagnostics.kappa.item() == 1.0
+
+
+def test_subset_kappa_can_mix_full_shared_update_tensor():
+    delta_1_all = torch.tensor(
+        [[[1.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.0, 2.0, 0.0]]]
+    )
+    delta_2_all = torch.tensor(
+        [[[0.0, 1.0, 0.0], [0.25, 0.0, 0.0], [0.0, 1.0, 0.0]]]
+    )
+    subset_indices = torch.tensor([1])
+
+    diagnostics = solve_two_track_proxy_kappa(
+        delta_1_all[:, subset_indices, :],
+        delta_2_all[:, subset_indices, :],
+        kappa_min=-10.0,
+        kappa_max=10.0,
+    )
+    kappa = diagnostics.kappa.reshape(1, 1, 1)
+    mixed_all = kappa * delta_1_all + (1 - kappa) * delta_2_all
+
+    assert mixed_all.shape == delta_1_all.shape
+    assert diagnostics.delta_1_norm.shape == torch.Size([1])

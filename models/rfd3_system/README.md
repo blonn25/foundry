@@ -89,6 +89,19 @@ rfd3sys_a90_b80_c100_0_track1_model_0.cif.gz
 rfd3sys_a90_b80_c100_0_merged_denoised_model_0.cif.gz
 ```
 
+The shared-chain proxy can solve `kappa` from a selected atom subset while
+still applying the mixed update to all non-fixed shared-chain atoms:
+
+```bash
+inference_sampler.kappa_atom_subset=ALL   # default, all coupled A atoms
+inference_sampler.kappa_atom_subset=BKBN  # N, CA, C, O only
+inference_sampler.kappa_atom_subset=CA    # CA only
+```
+
+When `BKBN` or `CA` is used, proxy diagnostics and residuals describe that
+subset. The final shared-chain coordinate update remains all-atom for every
+non-fixed shared atom in the coupled update map.
+
 ## Output Behavior
 
 For A+B/A+C coupled runs, the engine writes:
