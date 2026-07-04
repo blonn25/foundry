@@ -9,7 +9,10 @@ from jaxtyping import Float
 from rfd3_system.inference.symmetry.symmetry_utils import apply_symmetry_to_xyz_atomwise
 from rfd3_system.model.cfg_utils import strip_X
 from rfd3_system.system.chains import normalize_kappa_atom_subset
-from rfd3_system.system.proxy import solve_two_track_proxy_kappa
+from rfd3_system.system.proxy import (
+    cosine_similarity_by_sample,
+    solve_two_track_proxy_kappa,
+)
 
 from foundry.common import exists
 from foundry.utils.alignment import weighted_rigid_align
@@ -818,7 +821,20 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
             "proxy_residual": [],
             "delta_1_norm": [],
             "delta_2_norm": [],
+            "cosine_delta_1_mix_kappa_subset": [],
+            "cosine_delta_2_mix_kappa_subset": [],
+            "cosine_delta_1_mix_all_shared": [],
+            "cosine_delta_2_mix_all_shared": [],
         }
+        proxy_diag_fields = (
+            "kappa",
+            "raw_kappa",
+            "denominator",
+            "degenerate",
+            "proxy_residual",
+            "delta_1_norm",
+            "delta_2_norm",
+        )
 
         outs1: dict[str, Any] = {}
         outs2: dict[str, Any] = {}
@@ -898,6 +914,29 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
             )
             kappa_view = diag.kappa.reshape((D, 1, 1))
             delta_A_mix = kappa_view * delta_A_1 + (1 - kappa_view) * delta_A_2
+            delta_A_mix_kappa = kappa_view * delta_A_1_kappa + (
+                1 - kappa_view
+            ) * delta_A_2_kappa
+            cosine_delta_1_mix_kappa_subset = cosine_similarity_by_sample(
+                delta_A_1_kappa,
+                delta_A_mix_kappa,
+                eps=self.proxy_eps,
+            )
+            cosine_delta_2_mix_kappa_subset = cosine_similarity_by_sample(
+                delta_A_2_kappa,
+                delta_A_mix_kappa,
+                eps=self.proxy_eps,
+            )
+            cosine_delta_1_mix_all_shared = cosine_similarity_by_sample(
+                delta_A_1,
+                delta_A_mix,
+                eps=self.proxy_eps,
+            )
+            cosine_delta_2_mix_all_shared = cosine_similarity_by_sample(
+                delta_A_2,
+                delta_A_mix,
+                eps=self.proxy_eps,
+            )
 
             if (
                 step_num == 0
@@ -951,8 +990,20 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
             X2_denoised_traj.append(X2_denoised_L)
             t_hats.append(t_hat)
 
-            for key in proxy_diag:
+            for key in proxy_diag_fields:
                 proxy_diag[key].append(getattr(diag, key).detach().cpu())
+            proxy_diag["cosine_delta_1_mix_kappa_subset"].append(
+                cosine_delta_1_mix_kappa_subset.detach().cpu()
+            )
+            proxy_diag["cosine_delta_2_mix_kappa_subset"].append(
+                cosine_delta_2_mix_kappa_subset.detach().cpu()
+            )
+            proxy_diag["cosine_delta_1_mix_all_shared"].append(
+                cosine_delta_1_mix_all_shared.detach().cpu()
+            )
+            proxy_diag["cosine_delta_2_mix_all_shared"].append(
+                cosine_delta_2_mix_all_shared.detach().cpu()
+            )
 
         proxy_diag["t_hat"] = [t_hat.detach().cpu() for t_hat in t_hats]
         proxy_diag["normalized_t"] = [

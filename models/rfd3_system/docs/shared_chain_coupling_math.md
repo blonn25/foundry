@@ -515,6 +515,28 @@ post-clamp residual defined above; values closer to zero indicate that the
 implemented proxy equalization condition was better satisfied at that denoising
 step.
 
+The cosine PNGs use the same normalized `t` x-axis and a fixed y-axis of
+`[-1, 1]`. They show how aligned each track-specific shared-chain update is
+with the mixed update:
+
+```text
+cos_1_mix = <delta_A_1, delta_A_mix> / (||delta_A_1|| ||delta_A_mix|| + eps)
+cos_2_mix = <delta_A_2, delta_A_mix> / (||delta_A_2|| ||delta_A_mix|| + eps)
+```
+
+Two cosine diagnostic sets are saved:
+
+- `*_cosine_kappa_subset.png` uses the same atom subset used to solve `kappa`
+  (`ALL`, `BKBN`, or `CA`);
+- `*_cosine_all_shared.png` uses all non-fixed shared-chain atoms that receive
+  the mixed update.
+
+On cosine plots, hue identifies the diffusion-batch sample. The light line for
+that hue is `cos(delta_A_1, delta_A_mix)`, and the dark line for that same hue
+is `cos(delta_A_2, delta_A_mix)`. To keep batch-level plots readable, the
+plotter shows the first three samples by default; pass `--max-cosine-samples N`
+to show more.
+
 ## Exactness Caveat
 
 This implementation does not use exact model scores or the SuperDiff Ito

@@ -1,6 +1,10 @@
 import torch
+import pytest
 
-from rfd3_system.system.proxy import solve_two_track_proxy_kappa
+from rfd3_system.system.proxy import (
+    cosine_similarity_by_sample,
+    solve_two_track_proxy_kappa,
+)
 
 
 def test_proxy_kappa_keeps_matching_updates_balanced():
@@ -67,3 +71,38 @@ def test_subset_kappa_can_mix_full_shared_update_tensor():
 
     assert mixed_all.shape == delta_1_all.shape
     assert diagnostics.delta_1_norm.shape == torch.Size([1])
+
+
+def test_cosine_similarity_by_sample_handles_batched_updates():
+    delta_a = torch.tensor(
+        [
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            [[1.0, 0.0, 0.0], [0.0, 0.0, 0.0]],
+        ]
+    )
+    delta_b = torch.tensor(
+        [
+            [[1.0, 0.0, 0.0], [0.0, 1.0, 0.0]],
+            [[0.0, 1.0, 0.0], [0.0, 0.0, 0.0]],
+        ]
+    )
+
+    cosine = cosine_similarity_by_sample(delta_a, delta_b)
+
+    assert cosine.shape == torch.Size([2])
+    assert torch.allclose(cosine, torch.tensor([1.0, 0.0]), atol=1e-6)
+
+
+def test_cosine_similarity_by_sample_returns_finite_value_for_zero_norm():
+    delta_a = torch.zeros(2, 3, 3)
+    delta_b = torch.ones(2, 3, 3)
+
+    cosine = cosine_similarity_by_sample(delta_a, delta_b)
+
+    assert torch.all(torch.isfinite(cosine))
+    assert torch.allclose(cosine, torch.zeros(2))
+
+
+def test_cosine_similarity_by_sample_rejects_mismatched_shapes():
+    with pytest.raises(ValueError, match="matching shapes"):
+        cosine_similarity_by_sample(torch.zeros(1, 2, 3), torch.zeros(1, 3, 3))

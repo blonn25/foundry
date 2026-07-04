@@ -132,13 +132,17 @@ diffusion batch and writes PNG plots next to the chosen JSON:
 ```text
 *_kappa.png
 *_proxy_residual.png
+*_cosine_kappa_subset.png
+*_cosine_all_shared.png
 ```
 
 Track, merged, and repeated `model_N` JSON files from the same diffusion batch
 contain the same coupling diagnostics. The default output is one batch-level
-kappa PNG and one batch-level proxy-residual PNG, even when
-`merged_output_policy=none`. Use `--model-index N` to create a one-off plot set
-for a single generated model.
+kappa PNG, one batch-level proxy-residual PNG, and cosine PNGs when the JSON
+contains cosine diagnostics, even when `merged_output_policy=none`. Use
+`--model-index N` to create a one-off plot set for a single generated model.
+Cosine plots show at most the first three batch samples by default; use
+`--max-cosine-samples N` to change this.
 
 During coupled inference, the sampler logs periodic progress lines with the
 step count, normalized `t`, `t_hat`, kappa mean/min/max, and mean absolute

@@ -138,12 +138,12 @@ Output metadata records `superdiff_exact: false`, the coupling configuration,
 the sequence policy, proxy weights, residuals, norms, and degenerate-step flags.
 The physical RFD3 noise scale `t_hat` remains available in JSON diagnostics.
 After inference, `scripts/plot_coupling_diagnostics.py` can be run with a
-Matplotlib-capable environment to create PNG kappa and proxy-residual plots
-from those JSON diagnostics. The plotter can use track or merged JSON files and
-writes one batch-level plot set by default; pass `--model-index N` for a
-one-off plot set for a single generated model. The kappa PNG x-axis uses
-normalized `t` values, ordered from 0 on the noisy left side to 1 at the final
-denoised end on the right.
+Matplotlib-capable environment to create PNG kappa, proxy-residual, and
+delta/mix cosine-similarity plots from those JSON diagnostics. The plotter can
+use track or merged JSON files and writes one batch-level plot set by default;
+pass `--model-index N` for a one-off plot set for a single generated model. The
+plot x-axis uses normalized `t` values, ordered from 0 on the noisy left side
+to 1 at the final denoised end on the right.
 
 For the derivation of `kappa_raw`, the proxy residual, and the relationship
 between RFD3 denoiser deltas and EDM-style scores, see

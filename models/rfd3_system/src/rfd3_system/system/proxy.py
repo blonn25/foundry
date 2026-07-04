@@ -25,6 +25,33 @@ class ProxyKappaDiagnostics:
     delta_2_norm: torch.Tensor
 
 
+def cosine_similarity_by_sample(
+    delta_a: torch.Tensor,
+    delta_b: torch.Tensor,
+    *,
+    eps: float = 1e-8,
+) -> torch.Tensor:
+    """Return cosine similarity for paired batched update tensors.
+
+    The first dimension is treated as the sample/batch dimension. All remaining
+    dimensions are flattened into one update vector per sample.
+    """
+
+    if delta_a.shape != delta_b.shape:
+        raise ValueError(
+            f"Cosine inputs must have matching shapes, got "
+            f"{tuple(delta_a.shape)} and {tuple(delta_b.shape)}."
+        )
+    if delta_a.ndim < 2:
+        raise ValueError("Expected batched update tensors with at least 2 dims.")
+
+    reduce_dims = tuple(range(1, delta_a.ndim))
+    numerator = torch.sum(delta_a * delta_b, dim=reduce_dims)
+    norm_a = torch.sqrt(torch.sum(delta_a.square(), dim=reduce_dims))
+    norm_b = torch.sqrt(torch.sum(delta_b.square(), dim=reduce_dims))
+    return numerator / (norm_a * norm_b + eps)
+
+
 def solve_two_track_proxy_kappa(
     delta_1: torch.Tensor,
     delta_2: torch.Tensor,
@@ -86,4 +113,3 @@ def solve_two_track_proxy_kappa(
         delta_1_norm=torch.sqrt(norm_1_sq),
         delta_2_norm=torch.sqrt(norm_2_sq),
     )
-

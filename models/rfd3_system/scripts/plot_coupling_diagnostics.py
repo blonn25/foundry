@@ -23,13 +23,14 @@ matplotlib.use("Agg")
 
 import matplotlib.pyplot as plt
 import numpy as np
+from matplotlib.colors import to_rgb
 
 
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Create PNG plots for rfd3_system kappa and proxy-residual "
-            "diagnostics after inference has finished."
+            "Create PNG plots for rfd3_system kappa, proxy-residual, and "
+            "delta/mix cosine diagnostics after inference has finished."
         ),
     )
     parser.add_argument(
@@ -76,7 +77,18 @@ def main() -> int:
         default=180,
         help="PNG resolution. Default: 180.",
     )
+    parser.add_argument(
+        "--max-cosine-samples",
+        type=int,
+        default=3,
+        help=(
+            "Maximum number of diffusion-batch samples to show on each "
+            "batch-level cosine plot. Default: 3."
+        ),
+    )
     args = parser.parse_args()
+    if args.max_cosine_samples <= 0:
+        raise SystemExit("--max-cosine-samples must be positive.")
 
     json_paths = list(_iter_json_paths(args.paths, recursive=args.recursive))
     if not json_paths:
@@ -95,6 +107,7 @@ def main() -> int:
                 source,
                 out_dir=args.out_dir,
                 model_index=args.model_index,
+                max_cosine_samples=args.max_cosine_samples,
                 dpi=args.dpi,
             )
         except Exception as exc:  # noqa: BLE001 - keep batch plotting robust.
@@ -212,6 +225,7 @@ def _plot_one_source(
     *,
     out_dir: Path | None,
     model_index: int | None,
+    max_cosine_samples: int,
     dpi: int,
 ) -> list[Path]:
     """Create kappa and proxy-residual PNGs for one diffusion batch."""
@@ -274,6 +288,64 @@ def _plot_one_source(
             dpi=dpi,
         )
         paths.append(residual_path)
+
+    cosine_specs = (
+        (
+            "kappa_subset",
+            "cosine_delta_1_mix_kappa_subset",
+            "cosine_delta_2_mix_kappa_subset",
+            "Kappa-subset update/mix cosine similarity",
+        ),
+        (
+            "all_shared",
+            "cosine_delta_1_mix_all_shared",
+            "cosine_delta_2_mix_all_shared",
+            "All-shared-atom update/mix cosine similarity",
+        ),
+    )
+    for suffix, track_1_key, track_2_key, title in cosine_specs:
+        if track_1_key not in diagnostics or track_2_key not in diagnostics:
+            continue
+        cosine_1, labels = _diagnostic_array_for_model(
+            diagnostics[track_1_key],
+            track_1_key,
+            model_index,
+        )
+        cosine_2, labels_2 = _diagnostic_array_for_model(
+            diagnostics[track_2_key],
+            track_2_key,
+            model_index,
+        )
+        if cosine_1.shape != cosine_2.shape:
+            raise ValueError(
+                f"cosine diagnostic shape mismatch for {suffix}: "
+                f"{cosine_1.shape} versus {cosine_2.shape}"
+            )
+        if labels != labels_2:
+            raise ValueError(
+                f"cosine diagnostic labels differ for {suffix}: "
+                f"{labels!r} versus {labels_2!r}"
+            )
+        normalized_t = _normalized_t_axis(
+            diagnostics.get("normalized_t"),
+            cosine_1.shape[0],
+        )
+        cosine_path = plot_prefix.with_name(
+            f"{plot_prefix.name}_cosine_{suffix}.png"
+        )
+        _plot_cosine_similarity(
+            cosine_path,
+            normalized_t=normalized_t,
+            cosine_1=cosine_1,
+            cosine_2=cosine_2,
+            sample_labels=labels,
+            title=title,
+            track_1_label=track_1_label,
+            track_2_label=track_2_label,
+            max_samples=max_cosine_samples,
+            dpi=dpi,
+        )
+        paths.append(cosine_path)
 
     return paths
 
@@ -464,6 +536,72 @@ def _plot_proxy_residual(
     plt.close(fig)
 
 
+def _plot_cosine_similarity(
+    path: Path,
+    *,
+    normalized_t: np.ndarray,
+    cosine_1: np.ndarray,
+    cosine_2: np.ndarray,
+    sample_labels: list[str],
+    title: str,
+    track_1_label: str,
+    track_2_label: str,
+    max_samples: int,
+    dpi: int,
+) -> None:
+    """Plot paired delta/mix cosine trajectories with one hue per sample."""
+
+    fig, ax = plt.subplots(figsize=(8.5, 5.0), constrained_layout=True)
+    n_samples = cosine_1.shape[1]
+    n_plot = min(n_samples, max_samples)
+    cmap = plt.get_cmap("tab10")
+
+    for sample_idx in range(n_plot):
+        label = (
+            sample_labels[sample_idx]
+            if sample_idx < len(sample_labels)
+            else f"sample {sample_idx}"
+        )
+        base_color = cmap(sample_idx % cmap.N)
+        light_color = _blend_with_white(base_color, 0.62)
+        dark_color = _blend_with_black(base_color, 0.18)
+        ax.plot(
+            normalized_t,
+            cosine_1[:, sample_idx],
+            color=light_color,
+            linewidth=1.8,
+            label=f"{label}: cos(delta_1, delta_mix)",
+        )
+        ax.plot(
+            normalized_t,
+            cosine_2[:, sample_idx],
+            color=dark_color,
+            linewidth=1.8,
+            label=f"{label}: cos(delta_2, delta_mix)",
+        )
+
+    ax.axhline(1.0, color="0.35", linestyle="--", linewidth=1.0)
+    ax.axhline(0.0, color="0.45", linestyle=":", linewidth=1.0)
+    ax.axhline(-1.0, color="0.35", linestyle="--", linewidth=1.0)
+    ax.set_title(title)
+    ax.set_xlabel("Normalized denoising progress t (0 = noisiest, 1 = final)")
+    ax.set_ylabel("cosine similarity")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(-1.05, 1.05)
+    note = (
+        f"Light shade: cos(delta_1 from {track_1_label}, delta_mix). "
+        f"Dark shade: cos(delta_2 from {track_2_label}, delta_mix). "
+        "Hue identifies the diffusion-batch sample."
+    )
+    if n_plot < n_samples:
+        note += f" Showing first {n_plot} of {n_samples} samples."
+    ax.text(0.0, -0.24, note, transform=ax.transAxes, fontsize=8)
+    ax.legend(loc="best", fontsize=7)
+    ax.grid(alpha=0.25)
+    fig.savefig(path, dpi=dpi)
+    plt.close(fig)
+
+
 def _plot_samples(
     ax,
     normalized_t: np.ndarray,
@@ -484,6 +622,20 @@ def _plot_samples(
             linewidth=1.6,
             label=label,
         )
+
+
+def _blend_with_white(color, fraction: float):
+    """Return `color` blended toward white by `fraction`."""
+
+    rgb = np.asarray(to_rgb(color), dtype=float)
+    return tuple(rgb * (1.0 - fraction) + fraction)
+
+
+def _blend_with_black(color, fraction: float):
+    """Return `color` blended toward black by `fraction`."""
+
+    rgb = np.asarray(to_rgb(color), dtype=float)
+    return tuple(rgb * (1.0 - fraction))
 
 
 def _with_padding(y_min: float, y_max: float) -> tuple[float, float]:
