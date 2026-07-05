@@ -10,19 +10,25 @@ separated during downstream graph construction.
 For each rfd3_system diffusion-batch model, the helper script builds one
 combined structure with four chains:
 
-- `A`: shared chain A from track 2, using the SER motif variant;
+- `A`: shared chain A used for the A+B sequence-design context;
 - `B`: partner chain B from track 1;
-- `D`: a translated copy of track 2 chain A, renamed from A to D;
+- `D`: shared chain A used for the D+C context, renamed from A to D;
 - `C`: track 2 partner chain C, translated with D.
 
 The D+C complex is translated 100 Angstroms along the x-axis by default.  This
 keeps B and C outside each other's sequence-design neighborhood while allowing
 one decode to apply tied sequence groups across the two A copies.
 
-The helper validates that track 1 and track 2 shared-chain A backbone atoms are
-already colocated before mixing track 2 A with track 1 B.  If that check fails,
-the script exits instead of silently writing a geometrically inconsistent A+B
-complex.
+By default, `--shared-chain-source-mode track2` preserves the original behavior:
+track 2 A is used for both A+B and D+C, and the helper validates that track 1
+and track 2 shared-chain backbones are already colocated before mixing track 2 A
+with track 1 B.
+
+Use `--shared-chain-source-mode per-track` when the shared chain intentionally
+differs between tracks, such as GLU in track 1 to approximate SEP charge and SER
+in track 2.  In this mode, A+B uses track 1 A and B, while D+C uses track 2 A
+renamed to D and C.  The helper records the track-to-track shared-backbone RMSD
+in the manifest but does not use it as a hard failure criterion.
 
 Before writing the combined structure, the helper drops atoms whose coordinates are
 not finite.  This is necessary because AtomWorks may reconstruct missing
@@ -50,6 +56,10 @@ Caliby mode, ties are written as `symmetry_pos` groups such as `A1,D1|A2,D2`.
 Explicit residue groups are used so fixed A motif positions can be left out of
 the tied decoding constraints.
 
+For GLU/SER surrogate runs, keep `A237`, `A238`, and `A240` fixed.  This fixes
+the ARG residues and leaves the A240 GLU/SER variant position out of the A/D
+tie list, while all other non-fixed shared-chain residues remain tied.
+
 ## Helper Script
 
 Run the helper inside the Foundry container so it uses the same AtomWorks and
@@ -69,6 +79,9 @@ scripts/foundry_exec.sh \
     --number-of-batches 1 \
     --temperature 0.1
 ```
+
+Add `--shared-chain-source-mode per-track` for workflows that should preserve
+track-specific A variants in the downstream A+B and D+C sequence-design input.
 
 `--prepare-for mpnn` is the default and writes:
 
@@ -159,7 +172,9 @@ The helper reads Caliby's `A:B:C:D` sequence order and creates two ESMFold2
 folds for each selected Caliby row:
 
 - `A+B`, where chain A carries an ESMFold2 `SEP` modification at the
-  A240-derived final residue position;
+  A240-derived final residue position.  If Caliby saw a fixed GLU surrogate at
+  this position, the folding helper converts it back to SER before applying the
+  SEP modification;
 - `D+C`, where D is the tied copy of A and remains the unphosphorylated SER
   variant.
 

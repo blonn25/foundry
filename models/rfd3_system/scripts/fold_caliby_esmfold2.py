@@ -7,7 +7,9 @@ The tied Caliby workflow designs one separated four-chain input containing
 complex-folding jobs:
 
 * ``A+B`` with chain A carrying a SEP modification at the scaffolded source
-  residue, usually source residue A240.
+  residue, usually source residue A240.  If the Caliby input used a GLU
+  surrogate at that fixed A position, the sequence is converted back to SER
+  before applying the SEP modification.
 * ``D+C`` with chain D left as the unphosphorylated SER variant.
 
 The script is intended to run through ``scripts/esm_exec.sh`` on CoreHPC so
@@ -444,26 +446,34 @@ def mapped_sep_labels(entry: ManifestEntry, source_residue: str) -> tuple[str, s
             f"for {entry.example_id}: {entry.fixed_a_source_residues}"
         )
 
-    source_idx = entry.fixed_a_source_residues.index(source_residue)
+    return fixed_shared_label_pairs(entry)[
+        entry.fixed_a_source_residues.index(source_residue)
+    ]
+
+
+def fixed_shared_label_pairs(entry: ManifestEntry) -> list[tuple[str, str]]:
+    """Return fixed shared-chain A/D residue label pairs from the manifest."""
+
     n_fixed_a = len(entry.fixed_a_source_residues)
-    a_idx = source_idx
-    d_idx = n_fixed_a + source_idx
-    if d_idx >= len(entry.fixed_residues):
+    if len(entry.fixed_residues) < 2 * n_fixed_a:
         raise ValueError(
             f"Manifest fixed_residues for {entry.example_id} does not include "
             "both A and D mapped shared-chain residues."
         )
 
-    a_label = entry.fixed_residues[a_idx]
-    d_label = entry.fixed_residues[d_idx]
-    a_chain, _ = parse_residue_label(a_label)
-    d_chain, _ = parse_residue_label(d_label)
-    if a_chain != "A" or d_chain != "D":
-        raise ValueError(
-            f"Expected SEP source {source_residue} to map to A and D labels, "
-            f"but got {a_label!r} and {d_label!r} for {entry.example_id}."
-        )
-    return a_label, d_label
+    pairs: list[tuple[str, str]] = []
+    for source_idx in range(n_fixed_a):
+        a_label = entry.fixed_residues[source_idx]
+        d_label = entry.fixed_residues[n_fixed_a + source_idx]
+        a_chain, _ = parse_residue_label(a_label)
+        d_chain, _ = parse_residue_label(d_label)
+        if a_chain != "A" or d_chain != "D":
+            raise ValueError(
+                "Expected fixed shared source residues to map to A and D labels, "
+                f"but got {a_label!r} and {d_label!r} for {entry.example_id}."
+            )
+        pairs.append((a_label, d_label))
+    return pairs
 
 
 def split_caliby_sequence(row: CalibyRow) -> dict[str, str]:
@@ -475,12 +485,53 @@ def split_caliby_sequence(row: CalibyRow) -> dict[str, str]:
             f"Expected four colon-separated chains A:B:C:D in row {row.row_index}, "
             f"got {len(parts)} from {row.seq!r}."
         )
-    chains = {"A": parts[0], "B": parts[1], "C": parts[2], "D": parts[3]}
-    if chains["A"] != chains["D"]:
+    return {"A": parts[0], "B": parts[1], "C": parts[2], "D": parts[3]}
+
+
+def validate_shared_sequence_differences(
+    chains: dict[str, str],
+    entry: ManifestEntry,
+    row: CalibyRow,
+) -> None:
+    """Allow A/D sequence differences only at fixed shared-chain residues."""
+
+    if len(chains["A"]) != len(chains["D"]):
         raise ValueError(
-            f"Caliby tied sequence row {row.row_index} has non-identical A and D sequences."
+            f"Caliby row {row.row_index} has different A and D lengths: "
+            f"{len(chains['A'])} versus {len(chains['D'])}."
         )
-    return chains
+
+    allowed_differences: set[int] = set()
+    for a_label, d_label in fixed_shared_label_pairs(entry):
+        _, a_resid = parse_residue_label(a_label)
+        _, d_resid = parse_residue_label(d_label)
+        if a_resid != d_resid:
+            raise ValueError(
+                f"Fixed A/D residue labels do not share a sequence position for "
+                f"{entry.example_id}: {a_label!r}, {d_label!r}."
+            )
+        allowed_differences.add(a_resid)
+
+    unexpected = [
+        idx
+        for idx, (a_residue, d_residue) in enumerate(
+            zip(chains["A"], chains["D"]),
+            start=1,
+        )
+        if a_residue != d_residue and idx not in allowed_differences
+    ]
+    if unexpected:
+        raise ValueError(
+            f"Caliby tied sequence row {row.row_index} has A/D differences at "
+            f"non-fixed positions: {unexpected}"
+        )
+
+
+def replace_sequence_residue(sequence: str, position_one_based: int, residue: str) -> str:
+    """Return a sequence with one residue replaced by 1-based position."""
+
+    index = position_one_based - 1
+    return sequence[:index] + residue + sequence[index + 1 :]
 
 
 def build_fold_tasks(
@@ -497,21 +548,28 @@ def build_fold_tasks(
         _, a_sep_resid = parse_residue_label(a_sep_label)
         _, d_sep_resid = parse_residue_label(d_sep_label)
         chains = split_caliby_sequence(row)
+        validate_shared_sequence_differences(chains, entry, row)
         if len(chains["A"]) < a_sep_resid or len(chains["D"]) < d_sep_resid:
             raise ValueError(
                 f"SEP mapped residue is outside designed sequence length for row {row.row_index}: "
                 f"{a_sep_label}, {d_sep_label}."
             )
-        if chains["A"][a_sep_resid - 1] != "S":
+        a_sep_residue = chains["A"][a_sep_resid - 1]
+        if a_sep_residue not in {"E", "S"}:
             raise ValueError(
-                f"Expected SER at {a_sep_label} before applying SEP modification, "
-                f"but row {row.row_index} has {chains['A'][a_sep_resid - 1]!r}."
+                f"Expected SER or GLU surrogate at {a_sep_label} before applying "
+                f"SEP modification, but row {row.row_index} has {a_sep_residue!r}."
             )
         if chains["D"][d_sep_resid - 1] != "S":
             raise ValueError(
                 f"Expected SER at {d_sep_label} in unphosphorylated D chain, "
                 f"but row {row.row_index} has {chains['D'][d_sep_resid - 1]!r}."
             )
+        ab_a_sequence = (
+            replace_sequence_residue(chains["A"], a_sep_resid, "S")
+            if a_sep_residue == "E"
+            else chains["A"]
+        )
 
         base = f"{row.example_id}_sample{row.sample_index}"
         tasks.append(
@@ -519,7 +577,7 @@ def build_fold_tasks(
                 task_id=f"{base}_AB_SEP",
                 complex_kind="AB_SEP",
                 row=row,
-                chains={"A": chains["A"], "B": chains["B"]},
+                chains={"A": ab_a_sequence, "B": chains["B"]},
                 sep_chain="A",
                 sep_residue_one_based=a_sep_resid,
                 sep_position_zero_based=a_sep_resid - 1,

@@ -7,11 +7,11 @@ their JSON metadata.  For each model, this script writes one combined structure:
 
     A + B, D + C
 
-where A is the SER-containing shared chain from track 2, B is the track-1
-partner, D is a translated copy of track-2 A, and C is the translated track-2
-partner.  Downstream sequence-design tools then see two independent complexes
-in one file, while explicit symmetry groups tie the designed sequence positions
-in A and D.
+where the default mode uses the SER-containing shared chain from track 2 for
+both A and D.  The optional per-track mode instead keeps A from track 1 with B
+and uses track 2's A, relabeled as D, with C.  Downstream sequence-design tools
+then see two independent complexes in one file, while explicit symmetry groups
+tie the designed sequence positions in A and D.
 """
 
 from __future__ import annotations
@@ -104,6 +104,17 @@ def parse_args() -> argparse.Namespace:
         "--second-shared-chain-id",
         default="D",
         help="Chain ID assigned to the translated copy of the shared chain.",
+    )
+    parser.add_argument(
+        "--shared-chain-source-mode",
+        choices=["track2", "per-track"],
+        default="track2",
+        help=(
+            "How to assemble the shared chain for the separated complexes. "
+            "'track2' preserves legacy behavior by using track 2 A for both "
+            "A+B and D+C. 'per-track' uses track 1 A with B and track 2 A "
+            "relabelled as D with C."
+        ),
     )
     parser.add_argument(
         "--fixed-a-source-residues",
@@ -402,6 +413,39 @@ def join_symmetry_groups(groups: list[list[str]]) -> str:
     return "|".join(",".join(group) for group in groups)
 
 
+def symmetry_residue_pairs(
+    a_chain: AtomArray,
+    d_chain: AtomArray,
+    *,
+    shared_chain_id: str,
+    second_shared_chain_id: str,
+    fixed_a: list[str],
+    fixed_d: list[str],
+) -> list[list[str]]:
+    """Return A/D residue pairs that should be tied during sequence design."""
+
+    d_residue_set = set(residue_ids(d_chain, second_shared_chain_id))
+    fixed_a_set = set(fixed_a)
+    fixed_d_set = set(fixed_d)
+    symmetry_residues: list[list[str]] = []
+    missing_d: list[int] = []
+    for res_id in residue_ids(a_chain, shared_chain_id):
+        if res_id not in d_residue_set:
+            missing_d.append(res_id)
+            continue
+        a_label = f"{shared_chain_id}{res_id}"
+        d_label = f"{second_shared_chain_id}{res_id}"
+        if a_label in fixed_a_set or d_label in fixed_d_set:
+            continue
+        symmetry_residues.append([a_label, d_label])
+    if missing_d:
+        raise ValueError(
+            "Cannot tie A/D sequence positions because D is missing residue "
+            f"IDs present in A: {missing_d}"
+        )
+    return symmetry_residues
+
+
 def shared_backbone_rmsd(
     track1: AtomArray,
     track2: AtomArray,
@@ -457,26 +501,42 @@ def build_combined_input(
     track2_meta = load_json(pair.track2_json)
 
     rmsd = shared_backbone_rmsd(track1, track2, args.shared_chain_id)
-    if rmsd > args.backbone_rmsd_tolerance:
-        raise ValueError(
-            "Track shared-chain backbones are not colocated enough for direct "
-            f"A(track2)+B(track1) combination: RMSD={rmsd:.6g} Å, "
-            f"tolerance={args.backbone_rmsd_tolerance:.6g} Å."
-        )
-
     track1_map = track1_meta.get("diffused_index_map", {})
     track2_map = track2_meta.get("diffused_index_map", {})
-    fixed_a = mapped_residues(track2_map, fixed_a_sources)
-    fixed_d = mapped_residues(
-        track2_map,
-        fixed_a_sources,
-        target_chain=args.second_shared_chain_id,
-    )
     fixed_b = mapped_residues(track1_map, fixed_b_sources)
 
-    a_chain = subset_chain(track2, args.shared_chain_id)
+    if args.shared_chain_source_mode == "track2":
+        if rmsd > args.backbone_rmsd_tolerance:
+            raise ValueError(
+                "Track shared-chain backbones are not colocated enough for direct "
+                f"A(track2)+B(track1) combination: RMSD={rmsd:.6g} Å, "
+                f"tolerance={args.backbone_rmsd_tolerance:.6g} Å."
+            )
+        fixed_a = mapped_residues(track2_map, fixed_a_sources)
+        fixed_d = mapped_residues(
+            track2_map,
+            fixed_a_sources,
+            target_chain=args.second_shared_chain_id,
+        )
+        a_chain = subset_chain(track2, args.shared_chain_id)
+    elif args.shared_chain_source_mode == "per-track":
+        fixed_a = mapped_residues(track1_map, fixed_a_sources)
+        fixed_d = mapped_residues(
+            track2_map,
+            fixed_a_sources,
+            target_chain=args.second_shared_chain_id,
+        )
+        a_chain = subset_chain(track1, args.shared_chain_id)
+    else:
+        raise ValueError(
+            f"Unsupported shared_chain_source_mode: {args.shared_chain_source_mode!r}"
+        )
+
     b_chain = subset_chain(track1, args.track1_partner_chain_id)
-    d_chain = relabel_single_chain(a_chain, args.second_shared_chain_id)
+    d_chain = relabel_single_chain(
+        subset_chain(track2, args.shared_chain_id),
+        args.second_shared_chain_id,
+    )
     c_chain = subset_chain(track2, args.track2_partner_chain_id)
 
     translation = np.asarray([args.translation_distance, 0.0, 0.0], dtype=float)
@@ -500,12 +560,14 @@ def build_combined_input(
         combined_structure = write_pdb_file(combined, combined_base.with_suffix(".pdb"))
         combined_key = "combined_pdb"
 
-    fixed_a_set = set(fixed_a)
-    symmetry_residues = [
-        [f"{args.shared_chain_id}{res_id}", f"{args.second_shared_chain_id}{res_id}"]
-        for res_id in residue_ids(a_chain, args.shared_chain_id)
-        if f"{args.shared_chain_id}{res_id}" not in fixed_a_set
-    ]
+    symmetry_residues = symmetry_residue_pairs(
+        a_chain,
+        d_chain,
+        shared_chain_id=args.shared_chain_id,
+        second_shared_chain_id=args.second_shared_chain_id,
+        fixed_a=fixed_a,
+        fixed_d=fixed_d,
+    )
 
     fixed_residues = fixed_a + fixed_d + fixed_b
     input_config = {
@@ -525,6 +587,7 @@ def build_combined_input(
         "track2_cif": str(pair.track2_cif),
         "track2_json": str(pair.track2_json),
         combined_key: str(combined_structure),
+        "shared_chain_source_mode": args.shared_chain_source_mode,
         "shared_backbone_rmsd": rmsd,
         "translation_vector": translation.tolist(),
         "combined_atom_filter": finite_filter_stats,
@@ -615,6 +678,7 @@ def main() -> None:
 
     manifest = {
         "prepare_for": args.prepare_for,
+        "shared_chain_source_mode": args.shared_chain_source_mode,
         "rfd3_output_dir": str(output_dir),
         "combined_input_dir": str(combined_dir),
         "model_count": len(inputs),
