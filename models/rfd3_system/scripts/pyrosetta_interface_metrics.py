@@ -19,9 +19,14 @@ METRIC_KEYS = (
     "interface_dG_per_delta_SASA",
     "shape_complementarity",
     "sep_phosphate_hbond_count",
+    "sep_phosphate_polar_contact_count",
+    "sep_phosphate_bidentate_count",
     "pyrosetta_metrics_error",
 )
 PHOSPHATE_ACCEPTOR_ATOMS = {"O1P", "O2P", "O3P"}
+POLAR_HEAVY_ELEMENTS = {"N", "O", "S"}
+BACKBONE_HEAVY_ATOMS = {"N", "CA", "C", "O", "OXT"}
+SEP_PHOSPHATE_POLAR_CONTACT_CUTOFF = 3.6
 
 _PYROSETTA_INITIALIZED = False
 
@@ -141,6 +146,96 @@ def hbond_acceptor_atom_name(pose, residue_index: int, atom_index: int) -> str:
     return pose.residue(residue_index).atom_name(atom_index).strip()
 
 
+def atom_element(pose, residue_index: int, atom_index: int) -> str:
+    """Return the chemical element Rosetta assigned to one atom."""
+
+    return str(pose.residue(residue_index).atom_type(atom_index).element()).strip()
+
+
+def phosphate_atom_indices(pose, sep_indices: set[int]) -> list[tuple[int, int, str]]:
+    """Return SEP phosphate oxygen atom indices as pose residue/atom tuples."""
+
+    atoms: list[tuple[int, int, str]] = []
+    for residue_index in sep_indices:
+        residue = pose.residue(residue_index)
+        for atom_index in range(1, residue.natoms() + 1):
+            atom_name = residue.atom_name(atom_index).strip()
+            if atom_name in PHOSPHATE_ACCEPTOR_ATOMS:
+                atoms.append((residue_index, atom_index, atom_name))
+    return atoms
+
+
+def is_sidechain_heavy_atom(pose, residue_index: int, atom_index: int) -> bool:
+    """Return whether an atom is a sidechain heavy atom for bidentate grouping."""
+
+    atom_name = pose.residue(residue_index).atom_name(atom_index).strip()
+    if atom_name in BACKBONE_HEAVY_ATOMS:
+        return False
+    return atom_element(pose, residue_index, atom_index) != "H"
+
+
+def sep_phosphate_polar_contact_metrics(
+    pose,
+    shared_chain: str,
+    partner_chain: str,
+    cutoff: float = SEP_PHOSPHATE_POLAR_CONTACT_CUTOFF,
+) -> dict[str, int | str]:
+    """Count partner polar contacts and bidentate sidechains to SEP phosphate.
+
+    ``sep_phosphate_polar_contact_count`` is a contact-pair count: each partner
+    polar heavy atom within ``cutoff`` Angstroms of each SEP O1P/O2P/O3P atom is
+    counted separately. For example, one Tyr OH contacting O1P, O2P, and O3P is
+    three polar contacts.
+
+    ``sep_phosphate_bidentate_count`` is residue-based. A partner residue counts
+    once when its sidechain makes contacts to at least two unique SEP phosphate
+    oxygens through at least two unique sidechain heavy atoms.
+    """
+
+    sep_indices = sep_residue_indices(pose, shared_chain)
+    if not sep_indices:
+        return {
+            "sep_phosphate_polar_contact_count": "",
+            "sep_phosphate_bidentate_count": "",
+        }
+
+    phosphate_atoms = phosphate_atom_indices(pose, sep_indices)
+    polar_contact_count = 0
+    residue_contacts: dict[int, dict[str, set[Any]]] = {}
+    for partner_residue in range(1, pose.total_residue() + 1):
+        if residue_chain(pose, partner_residue) != partner_chain:
+            continue
+        partner = pose.residue(partner_residue)
+        for partner_atom in range(1, partner.nheavyatoms() + 1):
+            if atom_element(pose, partner_residue, partner_atom) not in POLAR_HEAVY_ELEMENTS:
+                continue
+            for sep_residue, sep_atom, sep_atom_name in phosphate_atoms:
+                distance = partner.xyz(partner_atom).distance(
+                    pose.residue(sep_residue).xyz(sep_atom)
+                )
+                if distance > cutoff:
+                    continue
+                polar_contact_count += 1
+                if not is_sidechain_heavy_atom(pose, partner_residue, partner_atom):
+                    continue
+                entry = residue_contacts.setdefault(
+                    partner_residue,
+                    {"partner_atoms": set(), "sep_oxygens": set()},
+                )
+                entry["partner_atoms"].add(partner_atom)
+                entry["sep_oxygens"].add((sep_residue, sep_atom_name))
+
+    bidentate_count = sum(
+        1
+        for contact in residue_contacts.values()
+        if len(contact["partner_atoms"]) >= 2 and len(contact["sep_oxygens"]) >= 2
+    )
+    return {
+        "sep_phosphate_polar_contact_count": polar_contact_count,
+        "sep_phosphate_bidentate_count": bidentate_count,
+    }
+
+
 def count_sep_phosphate_hbonds(pose, shared_chain: str, partner_chain: str) -> int | str:
     """Count partner-to-SEP phosphate H-bonds across the folded interface.
 
@@ -200,7 +295,6 @@ def compute_esmfold2_pyrosetta_metrics(
                 shared_chain,
                 partner_chain,
             ),
-        }
+        } | sep_phosphate_polar_contact_metrics(pose, shared_chain, partner_chain)
     except Exception as error:
         return empty_metrics(str(error))
-
