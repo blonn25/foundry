@@ -12,6 +12,7 @@ outputs such as A/B and D/C without renaming chains.
 from __future__ import annotations
 
 import os
+from pathlib import Path
 from typing import Any
 
 from .biopython_utils import hotspot_residues
@@ -21,13 +22,51 @@ from .generic_utils import clean_pdb
 _PYROSETTA_INITIALIZED = False
 
 
-def init_pyrosetta_once(options: str = "-mute all") -> Any:
+def _find_dalphaball_path() -> Path | None:
+    """Find the project-local BindCraft DAlphaBall binary when available."""
+
+    env_path = os.environ.get("BINDCRAFT_DALPHABALL")
+    candidates = [Path(env_path)] if env_path else []
+    here = Path(__file__).resolve()
+    for parent in here.parents:
+        candidates.append(
+            parent / "software" / "BindCraft" / "functions" / "DAlphaBall.gcc"
+        )
+        candidates.append(parent / "functions" / "DAlphaBall.gcc")
+
+    for candidate in candidates:
+        if candidate.is_file():
+            try:
+                candidate.chmod(candidate.stat().st_mode | 0o111)
+            except OSError:
+                # Read-only installs can still work if the file already has an
+                # executable bit; Rosetta will report a clear error otherwise.
+                pass
+            return candidate
+    return None
+
+
+def _default_pyrosetta_options(dalphaball_path: Path | None) -> str:
+    """Return the BindCraft-like PyRosetta options used by metric helpers."""
+
+    options = (
+        "-ignore_unrecognized_res -ignore_zero_occupancy -mute all "
+        "-corrections::beta_nov16 true -relax:default_repeats 1"
+    )
+    if dalphaball_path is not None:
+        options += f" -holes:dalphaball {dalphaball_path}"
+    return options
+
+
+def init_pyrosetta_once(options: str | None = None) -> Any:
     """Import and initialize PyRosetta once for standalone utility use."""
 
     global _PYROSETTA_INITIALIZED
     import pyrosetta as pr
 
     if not _PYROSETTA_INITIALIZED:
+        if options is None:
+            options = _default_pyrosetta_options(_find_dalphaball_path())
         pr.init(options)
         _PYROSETTA_INITIALIZED = True
     return pr
