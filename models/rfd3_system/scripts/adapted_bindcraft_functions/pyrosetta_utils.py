@@ -43,7 +43,7 @@ def score_interface(pdb_file, target_chain="A", binder_chain="B"):
     from pyrosetta.rosetta.protocols.rosetta_scripts import XmlObjects
 
     # load pose
-    pose = pr.pose_from_pdb(pdb_file)
+    pose = pr.pose_from_pdb(str(pdb_file))
 
     # analyze interface statistics
     iam = InterfaceAnalyzerMover()
@@ -178,8 +178,8 @@ def align_pdbs(reference_pdb, align_pdb, reference_chain_id, align_chain_id):
     from pyrosetta.rosetta.protocols.simple_moves import AlignChainMover
 
     # initiate poses
-    reference_pose = pr.pose_from_pdb(reference_pdb)
-    align_pose = pr.pose_from_pdb(align_pdb)
+    reference_pose = pr.pose_from_pdb(str(reference_pdb))
+    align_pose = pr.pose_from_pdb(str(align_pdb))
 
     align = AlignChainMover()
     align.pose(reference_pose)
@@ -197,7 +197,7 @@ def align_pdbs(reference_pdb, align_pdb, reference_chain_id, align_chain_id):
     align.apply(align_pose)
 
     # Overwrite aligned pdb
-    align_pose.dump_pdb(align_pdb)
+    align_pose.dump_pdb(str(align_pdb))
     clean_pdb(align_pdb)
 
 
@@ -209,8 +209,8 @@ def unaligned_rmsd(reference_pdb, align_pdb, reference_chain_id, align_chain_id)
     from pyrosetta.rosetta.core.select.residue_selector import ChainSelector
     from pyrosetta.rosetta.core.simple_metrics.metrics import RMSDMetric
 
-    reference_pose = pr.pose_from_pdb(reference_pdb)
-    align_pose = pr.pose_from_pdb(align_pdb)
+    reference_pose = pr.pose_from_pdb(str(reference_pdb))
+    align_pose = pr.pose_from_pdb(str(align_pdb))
 
     # Define chain selectors for the reference and align chains
     reference_chain_selector = ChainSelector(reference_chain_id)
@@ -249,7 +249,7 @@ def pr_relax(pdb_file, relaxed_pdb_path):
 
     if not os.path.exists(relaxed_pdb_path):
         # Generate pose
-        pose = pr.pose_from_pdb(pdb_file)
+        pose = pr.pose_from_pdb(str(pdb_file))
         start_pose = pose.clone()
 
         ### Generate movemaps
@@ -284,5 +284,5 @@ def pr_relax(pdb_file, relaxed_pdb_path):
                     pose.pdb_info().bfactor(resid, atom_id, bfactor)
 
         # output relaxed and aligned PDB
-        pose.dump_pdb(relaxed_pdb_path)
+        pose.dump_pdb(str(relaxed_pdb_path))
         clean_pdb(relaxed_pdb_path)
