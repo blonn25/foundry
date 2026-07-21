@@ -15,6 +15,7 @@ from __future__ import annotations
 
 import argparse
 import csv
+import gzip
 import json
 import os
 import re
@@ -36,6 +37,29 @@ PAE_ATTRIBUTE_CANDIDATES = (
     "aligned_error",
     "predicted_tm_aligned_error",
 )
+AA_THREE_TO_ONE = {
+    "ALA": "A",
+    "ARG": "R",
+    "ASN": "N",
+    "ASP": "D",
+    "CYS": "C",
+    "GLN": "Q",
+    "GLU": "E",
+    "GLY": "G",
+    "HIS": "H",
+    "ILE": "I",
+    "LEU": "L",
+    "LYS": "K",
+    "MET": "M",
+    "PHE": "F",
+    "PRO": "P",
+    "SER": "S",
+    "THR": "T",
+    "TRP": "W",
+    "TYR": "Y",
+    "VAL": "V",
+    "MSE": "M",
+}
 
 
 @dataclass(frozen=True)
@@ -202,6 +226,89 @@ def split_sequence(sequence: str, entry: ManifestEntry) -> dict[str, str]:
     return chains
 
 
+def open_text(path: Path):
+    return gzip.open(path, "rt") if path.name.endswith(".gz") else path.open()
+
+
+def residue_to_one_letter(residue_name: str) -> str:
+    return AA_THREE_TO_ONE.get(residue_name.strip().upper(), "X")
+
+
+def load_chain_sequences_from_structure(path: Path) -> dict[str, str]:
+    """Read chain-specific sequences from a ProteinMPNN output structure.
+
+    ProteinMPNN FASTA records contain one concatenated sequence with no chain
+    delimiters.  Foundry's MPNN writer may reorder chains while writing the
+    output CIF, so the only robust way to recover A/B/C/D sequences is from the
+    chain IDs in the output structure itself.
+    """
+
+    from Bio.PDB import MMCIFParser, PDBParser
+
+    if not path.is_file():
+        raise FileNotFoundError(f"ProteinMPNN output structure not found: {path}")
+    parser = (
+        MMCIFParser(QUIET=True)
+        if path.name.endswith((".cif", ".cif.gz", ".mmcif", ".mmcif.gz"))
+        else PDBParser(QUIET=True)
+    )
+    with open_text(path) as handle:
+        structure = parser.get_structure("mpnn", handle)
+    model = next(structure.get_models())
+    chains: dict[str, str] = {}
+    for chain in model:
+        residues: list[str] = []
+        seen: set[tuple[str, int, str]] = set()
+        for residue in chain:
+            if residue.id[0].strip():
+                continue
+            if "CA" not in residue:
+                continue
+            key = (str(chain.id), int(residue.id[1]), str(residue.id[2]).strip())
+            if key in seen:
+                continue
+            seen.add(key)
+            residues.append(residue_to_one_letter(residue.resname))
+        if residues:
+            chains[str(chain.id)] = "".join(residues)
+    if not chains:
+        raise ValueError(f"No polymer chain sequences found in {path}")
+    return chains
+
+
+def chain_sequences_for_record(
+    *,
+    mpnn_cif: Path,
+    fasta_sequence: str,
+    entry: ManifestEntry,
+) -> dict[str, str]:
+    """Return chain sequences for one MPNN design.
+
+    Prefer the output CIF because it carries explicit chain IDs.  The FASTA
+    fallback supports older runs where structures were not written, but it is
+    less robust for multi-chain tied designs.
+    """
+
+    if mpnn_cif.is_file():
+        chains = load_chain_sequences_from_structure(mpnn_cif)
+        missing = [chain_id for chain_id in entry.chain_lengths if chain_id not in chains]
+        if missing:
+            raise ValueError(
+                f"{mpnn_cif} is missing expected chain(s): {', '.join(missing)}"
+            )
+        length_mismatches = {
+            chain_id: (len(chains[chain_id]), expected_length)
+            for chain_id, expected_length in entry.chain_lengths.items()
+            if len(chains[chain_id]) != expected_length
+        }
+        if length_mismatches:
+            raise ValueError(
+                f"{mpnn_cif} chain lengths do not match manifest: {length_mismatches}"
+            )
+        return chains
+    return split_sequence(fasta_sequence, entry)
+
+
 def load_mpnn_records(mpnn_output_dir: Path, manifest: dict[str, ManifestEntry]) -> list[MpnnRecord]:
     records: list[MpnnRecord] = []
     for fasta_path in sorted(mpnn_output_dir.glob("*.fa")):
@@ -228,7 +335,11 @@ def load_mpnn_records(mpnn_output_dir: Path, manifest: dict[str, ManifestEntry])
                     design_index=int(match.group("design")),
                     sequence_recovery=sequence_recovery,
                     sequence=sequence,
-                    chains=split_sequence(sequence, entry),
+                    chains=chain_sequences_for_record(
+                        mpnn_cif=mpnn_cif,
+                        fasta_sequence=sequence,
+                        entry=entry,
+                    ),
                     mpnn_cif=str(mpnn_cif),
                 )
             )
