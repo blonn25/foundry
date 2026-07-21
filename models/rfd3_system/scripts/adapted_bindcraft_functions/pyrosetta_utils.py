@@ -288,7 +288,7 @@ def pr_relax(pdb_file, relaxed_pdb_path):
 
     if not os.path.exists(relaxed_pdb_path):
         # Generate pose
-        pose = pr.pose_from_pdb(str(pdb_file))
+        pose = pr.pose_from_file(str(pdb_file))
         start_pose = pose.clone()
 
         ### Generate movemaps

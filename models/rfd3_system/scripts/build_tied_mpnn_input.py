@@ -151,6 +151,12 @@ def parse_args() -> argparse.Namespace:
         help="ProteinMPNN sampling temperature.",
     )
     parser.add_argument(
+        "--structure-noise",
+        type=float,
+        default=0.0,
+        help="ProteinMPNN structure_noise value in Angstroms.",
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=123,
@@ -376,6 +382,21 @@ def residue_ids(atom_array: AtomArray, chain_id: str) -> list[int]:
     return ordered
 
 
+def chain_lengths(atom_array: AtomArray) -> dict[str, int]:
+    """Return residue counts per chain in atom-order chain labels."""
+
+    lengths: dict[str, int] = {}
+    for chain_id in dict.fromkeys(map(str, atom_array.chain_id)):
+        lengths[chain_id] = len(residue_ids(atom_array, chain_id))
+    return lengths
+
+
+def chain_order(atom_array: AtomArray) -> list[str]:
+    """Return chain IDs in atom order."""
+
+    return list(dict.fromkeys(map(str, atom_array.chain_id)))
+
+
 def mapped_residues(
     mapping: dict[str, str],
     source_components: list[str],
@@ -576,6 +597,7 @@ def build_combined_input(
         "seed": args.seed,
         "batch_size": args.batch_size,
         "number_of_batches": args.number_of_batches,
+        "structure_noise": args.structure_noise,
         "fixed_residues": fixed_residues,
         "symmetry_residues": symmetry_residues,
         "temperature": args.temperature,
@@ -591,6 +613,9 @@ def build_combined_input(
         "shared_backbone_rmsd": rmsd,
         "translation_vector": translation.tolist(),
         "combined_atom_filter": finite_filter_stats,
+        "mpnn_name": input_config["name"],
+        "chain_lengths": chain_lengths(combined),
+        "chain_order": chain_order(combined),
         "fixed_a_source_residues": fixed_a_sources,
         "fixed_b_source_residues": fixed_b_sources,
         "fixed_residues": fixed_residues,
@@ -618,6 +643,8 @@ def write_mpnn_outputs(out_dir: Path, inputs: list[dict[str, Any]], manifest: di
         "combined_input_dir": manifest["combined_input_dir"],
         "config_path": str(config_path),
         "model_count": manifest["model_count"],
+        "temperature": manifest["temperature"],
+        "structure_noise": manifest["structure_noise"],
         "entries": manifest["entries"],
     }
     manifest_path.write_text(json.dumps(mpnn_manifest, indent=2) + "\n")
@@ -692,6 +719,8 @@ def main() -> None:
                 "is_legacy_weights": args.is_legacy_weights,
                 "write_fasta": args.write_fasta,
                 "write_structures": args.write_structures,
+                "temperature": args.temperature,
+                "structure_noise": args.structure_noise,
             }
         )
         write_mpnn_outputs(out_dir, inputs, manifest)
