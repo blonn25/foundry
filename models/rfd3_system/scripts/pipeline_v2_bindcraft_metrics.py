@@ -40,24 +40,24 @@ PAIR_CHAINS = {
 }
 MONOMER_KINDS = {"A_SEP", "D_SER", "B", "C"}
 PREFILTER_THRESHOLDS = {
-    "ShapeComplementarity": (0.60, True),
-    "n_InterfaceHbonds": (3.0, True),
-    "n_InterfaceUnsatHbonds": (4.0, False),
-    "Surface_Hydrophobicity": (0.35, False),
-    "InterfaceAAs_K": (3.0, False),
-    "InterfaceAAs_M": (3.0, False),
+    "ShapeComplementarity": (0.50, True),
+    "n_InterfaceHbonds": (2.0, True),
+    "n_InterfaceUnsatHbonds": (6.0, False),
+    "Surface_Hydrophobicity": (0.37, False),
+    # "InterfaceAAs_K": (3.0, False),
+    # "InterfaceAAs_M": (3.0, False),
 }
 FINAL_THRESHOLDS = {
     "pLDDT": (0.8, True),
     "i_pTM": (0.5, True),
-    "i_pAE": (0.35, False),
-    "ShapeComplementarity": (0.60, True),
-    "n_InterfaceHbonds": (3.0, True),
-    "n_InterfaceUnsatHbonds": (4.0, False),
-    "Surface_Hydrophobicity": (0.35, False),
+    "i_pAE_raw": (12.5, False),
+    "ShapeComplementarity": (0.50, True),
+    "n_InterfaceHbonds": (2.0, True),
+    "n_InterfaceUnsatHbonds": (6.0, False),
+    "Surface_Hydrophobicity": (0.37, False),
     "Binder_RMSD": (3.5, False),
-    "InterfaceAAs_K": (3.0, False),
-    "InterfaceAAs_M": (3.0, False),
+    # "InterfaceAAs_K": (3.0, False),
+    # "InterfaceAAs_M": (3.0, False),
 }
 MPNN_CIF_RE = re.compile(
     r"^(?P<mpnn_name>.+)_b(?P<batch>\d+)_d(?P<design>\d+)\.cif$"
