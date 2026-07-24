@@ -525,12 +525,29 @@ def collect_pae_metrics(sample_result: Any, task: FoldTask) -> dict[str, Any]:
 
 
 def pae_group_labels(sample_result: Any, task: FoldTask, pae_length: int) -> Any | None:
+    """Return labels used to aggregate inter-chain PAE values.
+
+    SEP and other ESMFold2 modifications can be represented by token-level
+    labels that do not match the final structure residue count. Prefer labels
+    returned by ESMFold2 when they match the PAE matrix length, then fall back
+    to plain input-chain sequence lengths for unmodified folds.
+    """
+
     import numpy as np
 
     complex_chain_id = getattr(getattr(sample_result, "complex", None), "chain_id", None)
     if complex_chain_id is not None and len(complex_chain_id) == pae_length:
         labels = np.asarray(complex_chain_id)
         if np.unique(labels).size > 1:
+            return labels
+
+    entity_id = getattr(sample_result, "entity_id", None)
+    if entity_id is not None:
+        try:
+            labels = metric_to_numpy(entity_id).astype(int)
+        except (TypeError, ValueError):
+            labels = None
+        if labels is not None and labels.size == pae_length and np.unique(labels).size > 1:
             return labels
 
     labels = np.asarray(
