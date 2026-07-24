@@ -1,0 +1,25 @@
+# Hydra override shape for rfd3_system_v2 deterministic density coupling.
+coupling_mode: superdiff_shared_chain_density
+shared_chain_id: A
+complex_1_partners: [B]
+complex_2_partners: [C]
+unconditional_reference_track: track2
+merged_output_policy: both
+
+inference_sampler:
+  kind: superdiff_shared_chain_density
+  kappa_atom_subset: ALL
+  superdiff_guidance_scale: 1.0
+  superdiff_lift: 0.0
+  kappa_min: -1.0
+  kappa_max: 2.0
+  kappa_eps: 1.0e-8
+  density_hutchinson_probes: 1
+  density_validation_probes: 0
+
+# Supply the same track-specific structure/contig controls used by
+# rfd3_system. Track 2 should carry the unphosphorylated shared-A state when
+# unconditional_reference_track=track2.
+track_1_specification: {}
+track_2_specification: {}
+
