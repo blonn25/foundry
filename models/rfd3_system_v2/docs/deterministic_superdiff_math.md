@@ -120,6 +120,13 @@ neighbor-list `cdist` calculation. This is the almost-everywhere derivative of
 the piecewise denoiser graph; all continuous coordinate-dependent operations
 after neighborhood selection remain in the JVP.
 
+The Foundry implementation normally pools atom features with
+`index_reduce(..., "mean")`, for which the container's PyTorch build also
+lacks forward AD. v2 uses the algebraically equivalent
+`scatter_add / scatter_count` decomposition already used by Foundry's
+MPS-compatible path. This preserves the same scatter-mean field while exposing
+its tangent to JVP.
+
 `density_validation_probes` optionally draws fresh probes after solving. These
 do not affect the trajectory and measure how well the selected `kappa`
 generalizes beyond the random trace estimate used to solve it.

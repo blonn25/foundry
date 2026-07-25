@@ -26,12 +26,11 @@ from rfd3_system_v2.model.layers.layer_utils import (
     linearNoBias,
 )
 from rfd3_system_v2.model.layers.pairformer_layers import PairformerBlock
+from rfd3_system_v2.system.jvp_ops import scatter_mean
 from torch.nn.functional import one_hot
 
 from foundry import DISABLE_CHECKPOINTING
 from foundry.common import exists
-from foundry.utils.torch import scatter_mean
-
 logger = logging.getLogger(__name__)
 
 
