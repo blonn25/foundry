@@ -219,7 +219,17 @@ def create_attention_indices(
         X_L = torch.randn(
             (1, L, 3), device=device, dtype=torch.float
         )  # [L, 3] - random
-    D_LL = torch.cdist(X_L, X_L, p=2)  # [B, L, L] - pairwise atom distances
+    # Attention neighborhoods are discrete top-k selections. Their derivative
+    # is undefined at membership changes and zero almost everywhere else, so
+    # treat the selected graph as locally constant during forward-mode JVP.
+    # This also avoids PyTorch's unsupported forward-AD path through cdist
+    # while retaining derivatives through all continuous denoiser operations.
+    X_L_for_indices = X_L.detach()
+    D_LL = torch.cdist(
+        X_L_for_indices,
+        X_L_for_indices,
+        p=2,
+    )  # [B, L, L] - pairwise atom distances
 
     # Create attention indices using neighbour distances
     base_mask = ~f["unindexing_pair_mask"][

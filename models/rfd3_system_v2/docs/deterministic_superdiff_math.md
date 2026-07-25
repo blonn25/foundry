@@ -113,6 +113,13 @@ The same `z` is used for both tracks at a given probe, reducing variance in the
 difference. `density_hutchinson_probes` estimates are averaged. Forward-mode
 JVP is mandatory; a failure raises an error instead of changing methods.
 
+RFD3 rebuilds sparse nearest-neighbor attention indices from coordinates.
+Because top-k neighborhood membership is discrete, v2 treats that graph as
+locally constant during each JVP by detaching coordinates only for the
+neighbor-list `cdist` calculation. This is the almost-everywhere derivative of
+the piecewise denoiser graph; all continuous coordinate-dependent operations
+after neighborhood selection remain in the JVP.
+
 `density_validation_probes` optionally draws fresh probes after solving. These
 do not affect the trajectory and measure how well the selected `kappa`
 generalizes beyond the random trace estimate used to solve it.
@@ -207,7 +214,9 @@ complete stochastic transition:
 2. divergences use finite-sample Hutchinson estimates;
 3. clamping can intentionally violate the equality;
 4. RFD3's learned denoiser field is treated as the probability-flow field for
-   this local deterministic step.
+   this local deterministic step;
+5. sparse attention neighborhood membership is held locally constant during
+   each JVP.
 
 When `gamma=0`, no churn noise is added and this distinction narrows to trace
 estimation, model-field interpretation, and any active clamp.
@@ -224,4 +233,3 @@ estimation, model-field interpretation, and any active clamp.
 | `kappa_atom_subset` | `ALL` | Atoms used for divergence and kappa only. |
 | `density_hutchinson_probes` | `1` | Shared probes used in the solve. |
 | `density_validation_probes` | `0` | Fresh diagnostic probes; zero disables them. |
-
