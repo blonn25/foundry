@@ -89,3 +89,22 @@ envs/esm/bin/python \
 
 Keep generated outputs outside this source directory.
 
+## Validation
+
+CoreHPC GPU smoke validation completed on NVIDIA L40S nodes:
+
+- job `1069924`: `g=1`, one solve probe, no isolated-A model evaluation;
+- job `1069932`: `g=1.5`, track-2 isolated-A reference, one solve probe,
+  and one independent validation probe.
+
+Both jobs completed with `0:0`, wrote A+B, A+C, and both merged-output policies,
+and produced all expected diagnostic plots. Shared-chain CA coordinates matched
+exactly between the two track outputs in the default smoke run.
+
+During validation, two PyTorch forward-AD gaps were identified and handled
+without changing differentiation methods:
+
+- sparse top-k attention neighborhoods are treated as locally constant by
+  detaching only their `cdist` inputs;
+- atom-to-token scatter mean uses an exact `scatter_add / count`
+  decomposition instead of unsupported `index_reduce`.
