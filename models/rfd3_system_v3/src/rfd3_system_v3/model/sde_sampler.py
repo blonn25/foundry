@@ -29,6 +29,13 @@ from rfd3_system_v3.system.stochastic_control import (
 ranked_logger = RankedLogger(__name__, rank_zero_only=True)
 
 
+def _print_progress(message: str) -> None:
+    """Print sampler progress once even when Foundry suppresses INFO logging."""
+
+    if not torch.distributed.is_initialized() or torch.distributed.get_rank() == 0:
+        print(message, flush=True)
+
+
 def _append_diagnostics(
     destination: dict[str, list[torch.Tensor]],
     values: dict[str, torch.Tensor],
@@ -135,7 +142,7 @@ class SampleDiffusionReverseSDE(StrictReverseSDEMixin, SampleDiffusionWithMotif)
         diagnostics = {name: [] for name in diagnostic_names}
         outs: dict[str, Any] = {}
 
-        ranked_logger.info(
+        _print_progress(
             "Starting rfd3_system_v3 single-track reverse SDE: "
             f"{n_steps} steps, batch={batch_size}."
         )
@@ -200,7 +207,7 @@ class SampleDiffusionReverseSDE(StrictReverseSDEMixin, SampleDiffusionWithMotif)
                 or step_num == n_steps - 1
                 or (step_num + 1) % progress_interval == 0
             ):
-                ranked_logger.info(
+                _print_progress(
                     "rfd3_system_v3 reverse-SDE step "
                     f"{step_num + 1}/{n_steps} | "
                     f"t={float(normalized_t[step_num]):.3f} | "
@@ -486,7 +493,7 @@ class SampleDiffusionWithSuperDiffSharedChainSDE(
         outs0: dict[str, Any] = {}
         final_kappa: torch.Tensor | None = None
 
-        ranked_logger.info(
+        _print_progress(
             "Starting rfd3_system_v3 stochastic SuperDiff AND: "
             f"{n_steps} steps, batch={batch_size}, "
             f"subset={self.kappa_atom_subset}, "
@@ -660,7 +667,7 @@ class SampleDiffusionWithSuperDiffSharedChainSDE(
                 or step_num == n_steps - 1
                 or (step_num + 1) % progress_interval == 0
             ):
-                ranked_logger.info(
+                _print_progress(
                     "rfd3_system_v3 stochastic AND step "
                     f"{step_num + 1}/{n_steps} | "
                     f"t={float(normalized_t[step_num]):.3f} | "

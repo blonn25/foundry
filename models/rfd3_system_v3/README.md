@@ -122,3 +122,16 @@ scripts/esm_exec.sh \
 
 The plotter writes one batch-level set by default. Use `--model-index N` for a
 single diffusion-batch sample.
+
+## Validation
+
+The production Foundry image does not bundle pytest. Run the dependency-free
+integration checks through SLURM:
+
+```bash
+sbatch jobs/rfd3_system_v3_tests.sbatch
+```
+
+This imports the actual Foundry stack and checks the reverse-SDE update,
+closed-form stochastic kappa, raw Itô residual, sequence-logit mixing, strict
+configuration guards, and a complete lightweight two-track rollout.
