@@ -149,7 +149,7 @@ class SampleDiffusionWithMotif(SampleDiffusionConfig):
         base = torch.clamp(noise_schedule / self.sigma_data, min=0.0)
         numerator = base ** (1 / self.p) - self.s_max ** (1 / self.p)
         denominator = self.s_min ** (1 / self.p) - self.s_max ** (1 / self.p)
-        return numerator / denominator
+        return (numerator / denominator).clamp(0.0, 1.0)
 
     def _get_initial_structure(
         self,
