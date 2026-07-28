@@ -311,6 +311,28 @@ def _plot_one_source(
         )
         paths.append(denominator_path)
 
+    if "numerator" in diagnostics:
+        numerator, labels = _diagnostic_array_for_model(
+            diagnostics["numerator"],
+            "numerator",
+            model_index,
+        )
+        normalized_t = _normalized_t_axis(
+            diagnostics.get("normalized_t"),
+            numerator.shape[0],
+        )
+        numerator_path = plot_prefix.with_name(
+            f"{plot_prefix.name}_kappa_numerator.png"
+        )
+        _plot_kappa_numerator(
+            numerator_path,
+            normalized_t=normalized_t,
+            numerator=numerator,
+            sample_labels=labels,
+            dpi=dpi,
+        )
+        paths.append(numerator_path)
+
     cosine_specs = (
         (
             "kappa_subset",
@@ -577,11 +599,39 @@ def _plot_kappa_denominator(
     ax.set_xlim(0.0, 1.0)
     max_abs = float(np.nanmax(np.abs(denominator))) if denominator.size else 1.0
     max_abs = max(max_abs, 1e-6)
+    # ax.set_ylim(-1.05 * max_abs, 1.05 * max_abs)
+    ax.set_ylim(-0.05, 1.05)
+    ax.legend(loc="best", fontsize=12)
+    ax.grid(alpha=0.25)
+    fig.savefig(path, dpi=dpi)
+    plt.close(fig)
+
+
+def _plot_kappa_numerator(
+    path: Path,
+    *,
+    normalized_t: np.ndarray,
+    numerator: np.ndarray,
+    sample_labels: list[str],
+    dpi: int,
+) -> None:
+    """Plot kappa numerator trajectories."""
+
+    fig, ax = plt.subplots(figsize=(8.5, 5.0), constrained_layout=True)
+    _plot_samples(ax, normalized_t, numerator, sample_labels)
+    ax.axhline(0.0, color="0.35", linestyle="--", linewidth=1.0)
+    ax.set_title("Kappa numerator over denoising")
+    ax.set_xlabel("Normalized denoising progress t (0 = noisiest, 1 = final)")
+    ax.set_ylabel("kappa numerator")
+    ax.set_xlim(0.0, 1.0)
+    max_abs = float(np.nanmax(np.abs(numerator))) if numerator.size else 1.0
+    max_abs = max(max_abs, 1e-6)
     ax.set_ylim(-1.05 * max_abs, 1.05 * max_abs)
     ax.legend(loc="best", fontsize=12)
     ax.grid(alpha=0.25)
     fig.savefig(path, dpi=dpi)
     plt.close(fig)
+
 
 
 def _plot_cosine_similarity(

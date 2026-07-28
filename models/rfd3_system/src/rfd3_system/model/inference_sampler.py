@@ -829,6 +829,7 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
         proxy_diag_fields = (
             "kappa",
             "raw_kappa",
+            "numerator",
             "denominator",
             "degenerate",
             "proxy_residual",

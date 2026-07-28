@@ -18,6 +18,7 @@ class ProxyKappaDiagnostics:
 
     raw_kappa: torch.Tensor
     kappa: torch.Tensor
+    numerator: torch.Tensor
     denominator: torch.Tensor
     degenerate: torch.Tensor
     proxy_residual: torch.Tensor
@@ -107,6 +108,7 @@ def solve_two_track_proxy_kappa(
     return ProxyKappaDiagnostics(
         raw_kappa=raw_kappa,
         kappa=kappa,
+        numerator=numerator,
         denominator=denominator,
         degenerate=degenerate,
         proxy_residual=proxy_residual,
