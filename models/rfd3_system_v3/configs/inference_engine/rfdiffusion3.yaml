@@ -1,0 +1,92 @@
+# @package _global_
+defaults:
+  - base
+  - _self_
+
+_target_: rfd3_system_v3.engine.RFD3InferenceEngine
+
+out_dir: ???
+inputs: ???  # null, json, pdb or
+ckpt_path: rfd3
+json_keys_subset: null
+skip_existing: True
+
+#########################################################
+# Design spec args: overrides args from input json
+specification: {}
+#########################################################
+
+# Diffusion args
+diffusion_batch_size: 8
+n_batches: 1
+
+# Inference sampler args | set to None to use the default in the checkpoint's config
+inference_sampler:
+  kind: reverse_sde
+  # Classifier-free guidance args:
+  cfg_features:  # set to 0 in the reference CFG step
+    - active_donor
+    - active_acceptor
+    - ref_atomwise_rasa
+  use_classifier_free_guidance: False
+  cfg_t_max: null # max t to apply cfg guidance
+  cfg_scale: 1.5
+  center_option: "all"  # Options are ["all", "motif", "diffuse"]
+  s_trans: 1.0  # Translational noise scale for augmentation during inference
+  inference_noise_scaling_factor: 1.0
+  allow_realignment: False
+
+  # Recycling
+  n_recycle: null  # Override model default n_recycle for inference (default from checkpoint: 2)
+
+  # Diffusion args:
+  num_timesteps: 200
+  # These legacy fields must remain neutral in strict reverse-SDE modes.
+  step_scale: 1.0
+  noise_scale: 1.0
+  p: 7
+  gamma_0: 0.0
+  gamma_min: 0.0
+  s_jitter_origin: 0.0  # Sigma of gaussian noise to jitter the motif offset (equivalent to ORI token Jitter)
+  # rfd3_system_v3 stochastic SuperDiff settings:
+  kappa_atom_subset: ALL  # ALL is primary; BKBN and CA are approximate ablations
+  superdiff_guidance_scale: 1.0  # g; g=1 skips the isolated-A denoiser call
+  superdiff_lift: 0.0
+  kappa_min: -1.0  # Set to null to disable the lower clamp
+  kappa_max: 2.0   # Set to null to disable the upper clamp
+  kappa_eps: 1.0e-8
+
+#########################################################
+# Stochastic reverse-SDE SuperDiff AND coupling.
+# This is off by default. To enable:
+# coupling_mode=superdiff_shared_chain_sde
+# inference_sampler.kind=superdiff_shared_chain_sde
+coupling_mode: null
+shared_chain_id: A
+complex_1_partners:
+  - B
+complex_2_partners:
+  - C
+track_1_specification: {}
+track_2_specification: {}
+unconditional_reference_track: null  # Required only when guidance != 1
+merged_output_policy: both  # track1, track2, both, or none
+#########################################################
+
+# Saving args
+cleanup_guideposts: True
+cleanup_virtual_atoms: True
+read_sequence_from_sequence_head: True
+output_full_json: True
+
+# Prefix to add to all output samples
+# Default: None      -> f'{jsonfilebasename}_{jsonkey}_{batch}_{model}'
+# Otherwise: string  -> f'{string}{jsonkey}_{batch}_{model}'
+# e.g. Empty string  -> f'{jsonkey}_{batch}_{model}'
+# e.g. Chunk string  -> f'{chunkprefix_}{jsonkey}_{batch}_{model}' (pipelines usage)
+global_prefix: null
+dump_prediction_metadata_json: True
+dump_trajectories: False
+align_trajectory_structures: False
+prevalidate_inputs: False
+low_memory_mode: False # False for standard mode, True for memory efficient tokenization mode

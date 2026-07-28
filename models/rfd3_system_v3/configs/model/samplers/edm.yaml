@@ -1,0 +1,27 @@
+
+kind: reverse_sde
+solver: "af3"
+num_timesteps: 100
+min_t: 0
+max_t: 1
+sigma_data: ${model.net.diffusion_module.sigma_data}
+s_min: 4e-4
+s_max: 160
+p: 7
+gamma_0: 0.0
+gamma_min: 0.0
+noise_scale: 1.0
+step_scale: 1.0
+kappa_atom_subset: ALL
+superdiff_guidance_scale: 1.0
+superdiff_lift: 0.0
+kappa_min: -1.0
+kappa_max: 2.0
+kappa_eps: 1.0e-8
+allow_realignment: False
+use_classifier_free_guidance: False
+cfg_scale: 1.5
+cfg_features: # CFG_features will be set to 0 in the unconditional CFG step
+  - ref_atomwise_rasa
+  - active_donor
+  - active_acceptor

@@ -1,0 +1,13 @@
+# Ordinary single-track RFD3 generation with the strict reverse SDE.
+coupling_mode: null
+
+inference_sampler:
+  kind: reverse_sde
+  num_timesteps: 200
+  gamma_0: 0.0
+  gamma_min: 0.0
+  noise_scale: 1.0
+  step_scale: 1.0
+  use_classifier_free_guidance: false
+  allow_realignment: false
+  s_jitter_origin: 0.0

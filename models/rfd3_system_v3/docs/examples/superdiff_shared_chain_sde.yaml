@@ -1,0 +1,24 @@
+# Stochastic SuperDiff AND for A+B and A+C with one shared A state.
+coupling_mode: superdiff_shared_chain_sde
+shared_chain_id: A
+complex_1_partners: [B]
+complex_2_partners: [C]
+merged_output_policy: both
+unconditional_reference_track: null
+
+inference_sampler:
+  kind: superdiff_shared_chain_sde
+  num_timesteps: 200
+  gamma_0: 0.0
+  gamma_min: 0.0
+  noise_scale: 1.0
+  step_scale: 1.0
+  use_classifier_free_guidance: false
+  allow_realignment: false
+  s_jitter_origin: 0.0
+  kappa_atom_subset: ALL
+  superdiff_guidance_scale: 1.0
+  superdiff_lift: 0.0
+  kappa_min: -1.0
+  kappa_max: 2.0
+  kappa_eps: 1.0e-8
