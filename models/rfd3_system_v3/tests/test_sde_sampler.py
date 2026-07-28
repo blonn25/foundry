@@ -5,7 +5,7 @@ from __future__ import annotations
 import pytest
 import torch
 
-from rfd3_system_v3.model.sde_sampler import (
+from rfd3_system_v3.model.inference_sampler import (
     SampleDiffusionReverseSDE,
     SampleDiffusionWithSuperDiffSharedChainSDE,
 )
