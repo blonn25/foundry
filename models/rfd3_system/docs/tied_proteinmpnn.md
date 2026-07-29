@@ -131,6 +131,25 @@ scripts/foundry_exec.sh \
 ProteinMPNN outputs should remain under `outputs/foundry/mpnn/`.  Do not write
 sequence-design outputs into the Foundry source tree.
 
+## Backbone Designability Folding
+
+For de novo shared-system designability analysis, use the focused helper:
+
+```bash
+scripts/esm_exec.sh \
+  python software/foundry/models/rfd3_system/scripts/fold_tied_mpnn_designability.py \
+    outputs/pipeline/<campaign>/proteinmpnn/<row> \
+    --out-dir outputs/pipeline/<campaign>/esmfold2/<row> \
+    --model esmfold2-fast \
+    --seed 123
+```
+
+It validates that A and D have identical sequences, then folds only A+B and
+D+C. It does not create PTM, monomer, or off-target tasks. ProteinMPNN CIF
+outputs should be retained until the helper has recovered chain-specific
+sequences; `--remove-mpnn-structures-after-success` removes those temporary
+files only after every planned fold completes.
+
 ## Caliby Command
 
 After the helper has written `caliby_constraints.csv` and the PDB inputs, run

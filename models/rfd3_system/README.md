@@ -31,6 +31,8 @@ in [docs/joint_motif_scaffolding.md](docs/joint_motif_scaffolding.md).
 The tied ProteinMPNN post-design workflow for separated A+B and A+C sequence
 design is documented in
 [docs/tied_proteinmpnn.md](docs/tied_proteinmpnn.md).
+The controlled ProteinMPNN/ESMFold2-Fast designability experiment is described
+in [docs/proxy_designability_grid_001.md](docs/proxy_designability_grid_001.md).
 
 ## Active Layout
 
@@ -42,10 +44,12 @@ docs/superdiff_shared_chain.md           Prototype design and validation notes
 docs/shared_chain_coupling_math.md       Coupling equations and diagnostics
 docs/joint_motif_scaffolding.md          Track-specific motif scaffolding notes
 docs/tied_proteinmpnn.md                 Tied ProteinMPNN sequence-design workflow
+docs/proxy_designability_grid_001.md     Proxy parameter designability experiment
 docs/examples/superdiff_shared_chain_proxy.yaml
                                           Minimal example override shape
 scripts/plot_coupling_diagnostics.py     Post-run Matplotlib diagnostics plotter
 scripts/build_tied_mpnn_input.py         Build separated A+B / D+C tied-MPNN inputs
+scripts/fold_tied_mpnn_designability.py  Fold only tied A+B and D+C complexes
 archived/                                Upstream RFD3 docs/assets kept for reference only
 ```
 
