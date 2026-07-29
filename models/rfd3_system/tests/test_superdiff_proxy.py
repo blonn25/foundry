@@ -51,6 +51,113 @@ def test_proxy_kappa_clamps_extreme_weights():
     assert diagnostics.kappa.item() == 1.0
 
 
+def test_zero_regularization_reproduces_legacy_kappa():
+    delta_1 = torch.tensor([[[1.01, 0.0, 0.0]]])
+    delta_2 = torch.tensor([[[1.00, 0.0, 0.0]]])
+
+    diagnostics = solve_two_track_proxy_kappa(
+        delta_1,
+        delta_2,
+        kappa_min=-1_000.0,
+        kappa_max=1_000.0,
+        regularization_rho=0.0,
+    )
+
+    assert torch.allclose(diagnostics.regularized_kappa, diagnostics.raw_kappa)
+    assert torch.allclose(diagnostics.kappa, diagnostics.raw_kappa)
+    assert torch.allclose(diagnostics.reliability, torch.ones(1))
+
+
+def test_regularization_shrinks_ill_conditioned_kappa_toward_half():
+    delta_1 = torch.tensor([[[1.01, 0.0, 0.0]]])
+    delta_2 = torch.tensor([[[1.00, 0.0, 0.0]]])
+
+    weak = solve_two_track_proxy_kappa(
+        delta_1,
+        delta_2,
+        kappa_min=-1_000.0,
+        kappa_max=1_000.0,
+        regularization_rho=1e-3,
+    )
+    strong = solve_two_track_proxy_kappa(
+        delta_1,
+        delta_2,
+        kappa_min=-1_000.0,
+        kappa_max=1_000.0,
+        regularization_rho=1e-1,
+    )
+
+    weak_distance = torch.abs(weak.regularized_kappa - 0.5)
+    strong_distance = torch.abs(strong.regularized_kappa - 0.5)
+    assert torch.all(strong_distance < weak_distance)
+    assert torch.all(weak.regularized_kappa < weak.raw_kappa)
+    assert torch.all(strong.reliability < weak.reliability)
+    assert torch.all(torch.abs(strong.regularized_proxy_residual) > 0)
+
+
+def test_regularization_is_invariant_to_common_delta_rescaling():
+    delta_1 = torch.tensor([[[1.01, 0.0, 0.0], [0.0, 0.5, 0.0]]])
+    delta_2 = torch.tensor([[[1.00, 0.0, 0.0], [0.0, 0.4, 0.0]]])
+
+    diagnostics = solve_two_track_proxy_kappa(
+        delta_1,
+        delta_2,
+        regularization_rho=1e-4,
+        kappa_min=-1_000.0,
+        kappa_max=1_000.0,
+    )
+    scaled = solve_two_track_proxy_kappa(
+        100.0 * delta_1,
+        100.0 * delta_2,
+        regularization_rho=1e-4,
+        kappa_min=-1_000.0,
+        kappa_max=1_000.0,
+    )
+
+    assert torch.allclose(
+        diagnostics.regularized_kappa,
+        scaled.regularized_kappa,
+        atol=1e-5,
+    )
+    assert torch.allclose(
+        diagnostics.reliability,
+        scaled.reliability,
+        atol=1e-6,
+    )
+    assert torch.allclose(
+        diagnostics.relative_denominator,
+        scaled.relative_denominator,
+        atol=1e-6,
+    )
+
+
+def test_regularization_is_applied_before_clamping():
+    delta_1 = torch.tensor([[[1.01, 0.0, 0.0]]])
+    delta_2 = torch.tensor([[[1.00, 0.0, 0.0]]])
+
+    diagnostics = solve_two_track_proxy_kappa(
+        delta_1,
+        delta_2,
+        kappa_min=-1.0,
+        kappa_max=2.0,
+        regularization_rho=1e-1,
+    )
+
+    assert diagnostics.raw_kappa.item() > 2.0
+    assert -1.0 < diagnostics.regularized_kappa.item() < 2.0
+    assert torch.allclose(diagnostics.kappa, diagnostics.regularized_kappa)
+
+
+@pytest.mark.parametrize("rho", [-1.0, float("nan"), float("inf")])
+def test_proxy_kappa_rejects_invalid_regularization(rho):
+    with pytest.raises(ValueError, match="finite and non-negative"):
+        solve_two_track_proxy_kappa(
+            torch.ones(1, 2, 3),
+            torch.zeros(1, 2, 3),
+            regularization_rho=rho,
+        )
+
+
 def test_subset_kappa_can_mix_full_shared_update_tensor():
     delta_1_all = torch.tensor(
         [[[1.0, 0.0, 0.0], [0.5, 0.0, 0.0], [0.0, 2.0, 0.0]]]

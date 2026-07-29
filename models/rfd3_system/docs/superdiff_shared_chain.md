@@ -78,12 +78,14 @@ score-like update proxy for the shared chain A:
    both tracks, and draw independent B/C noise.
 4. Run the RFD3 denoiser once per track.
 5. Extract A updates, `delta_A_ab` and `delta_A_ac`.
-6. Estimate adaptive weights from the two proxy vectors with a stabilized
+6. Estimate adaptive weights from the two proxy vectors with a
    SuperDiff-inspired two-track solve. By default this solve uses all non-fixed
    shared-chain atoms; `inference_sampler.kappa_atom_subset=BKBN` or `CA` can
    restrict only the kappa solve to backbone or CA atoms.
-7. Clamp weights to a configured range and fall back to equal weighting when
-   the proxy system is degenerate.
+7. Optionally shrink ill-conditioned weights smoothly toward equal weighting
+   with `inference_sampler.proxy_kappa_regularization_rho`, then clamp the
+   result to the configured range. Literal degeneracy still falls back to
+   `kappa=0.5`.
 8. Update all non-fixed A atoms with the weighted proxy update, while updating
    B and C with their normal per-track updates.
 9. Relabel track 2's non-shared partner chains back to the user-facing global
@@ -101,16 +103,19 @@ delta_mix = kappa * delta_1 + (1-kappa) * delta_2
 proxy_i(delta_mix) = <delta_mix, delta_i> - norm_weight * ||delta_i||^2
 ```
 
-It chooses `kappa` so that:
+The raw solve chooses `kappa` so that:
 
 ```text
 proxy_1(delta_mix) ~= proxy_2(delta_mix)
 ```
 
-Then it clamps `kappa` to `[proxy_kappa_min, proxy_kappa_max]` and falls back
-to `0.5` when the system is degenerate. This is only a stabilized local proxy
-for equalizing condition-specific update pressure; it is not the SuperDiff
-Itô-density estimator.
+When rho is nonzero, a dimensionless reliability factor based on the update
+difference relative to the two update magnitudes shrinks the raw result toward
+`0.5` before clamping. This deliberately trades exact proxy equalization for
+stability when the tracks are nearly indistinguishable. `rho=0` preserves the
+legacy solve. The full equations are in `shared_chain_coupling_math.md`.
+This remains a local proxy for condition-specific update pressure; it is not
+the SuperDiff Itô-density estimator.
 
 The sampler implementation lives in
 `src/rfd3_system/model/inference_sampler.py` as

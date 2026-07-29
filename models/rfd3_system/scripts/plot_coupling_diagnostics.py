@@ -29,8 +29,9 @@ from matplotlib.colors import to_rgb
 def main() -> int:
     parser = argparse.ArgumentParser(
         description=(
-            "Create PNG plots for rfd3_system kappa, proxy-residual, and "
-            "delta/mix cosine diagnostics after inference has finished."
+            "Create PNG plots for rfd3_system kappa regularization, "
+            "proxy-residual, and delta/mix cosine diagnostics after inference "
+            "has finished."
         ),
     )
     parser.add_argument(
@@ -267,6 +268,97 @@ def _plot_one_source(
         )
         paths.append(kappa_path)
 
+    if all(
+        key in diagnostics
+        for key in ("raw_kappa", "regularized_kappa", "kappa")
+    ):
+        raw_kappa, labels = _diagnostic_array_for_model(
+            diagnostics["raw_kappa"],
+            "raw_kappa",
+            model_index,
+        )
+        regularized_kappa, regularized_labels = _diagnostic_array_for_model(
+            diagnostics["regularized_kappa"],
+            "regularized_kappa",
+            model_index,
+        )
+        applied_kappa, applied_labels = _diagnostic_array_for_model(
+            diagnostics["kappa"],
+            "kappa",
+            model_index,
+        )
+        if labels != regularized_labels or labels != applied_labels:
+            raise ValueError("kappa stage diagnostic labels do not match")
+        normalized_t = _normalized_t_axis(
+            diagnostics.get("normalized_t"),
+            raw_kappa.shape[0],
+        )
+        stages_path = plot_prefix.with_name(
+            f"{plot_prefix.name}_kappa_stages.png"
+        )
+        _plot_kappa_stages(
+            stages_path,
+            normalized_t=normalized_t,
+            raw_kappa=raw_kappa,
+            regularized_kappa=regularized_kappa,
+            applied_kappa=applied_kappa,
+            sample_labels=labels,
+            kappa_min=float(coupling.get("proxy_kappa_min", -1.0)),
+            kappa_max=float(coupling.get("proxy_kappa_max", 2.0)),
+            dpi=dpi,
+        )
+        paths.append(stages_path)
+
+    if "reliability" in diagnostics:
+        reliability, labels = _diagnostic_array_for_model(
+            diagnostics["reliability"],
+            "reliability",
+            model_index,
+        )
+        normalized_t = _normalized_t_axis(
+            diagnostics.get("normalized_t"),
+            reliability.shape[0],
+        )
+        reliability_path = plot_prefix.with_name(
+            f"{plot_prefix.name}_kappa_reliability.png"
+        )
+        _plot_kappa_reliability(
+            reliability_path,
+            normalized_t=normalized_t,
+            reliability=reliability,
+            sample_labels=labels,
+            rho=float(
+                coupling.get("proxy_kappa_regularization_rho", 0.0)
+            ),
+            dpi=dpi,
+        )
+        paths.append(reliability_path)
+
+    if "relative_denominator" in diagnostics:
+        relative_denominator, labels = _diagnostic_array_for_model(
+            diagnostics["relative_denominator"],
+            "relative_denominator",
+            model_index,
+        )
+        normalized_t = _normalized_t_axis(
+            diagnostics.get("normalized_t"),
+            relative_denominator.shape[0],
+        )
+        relative_denominator_path = plot_prefix.with_name(
+            f"{plot_prefix.name}_kappa_relative_denominator.png"
+        )
+        _plot_relative_denominator(
+            relative_denominator_path,
+            normalized_t=normalized_t,
+            relative_denominator=relative_denominator,
+            sample_labels=labels,
+            rho=float(
+                coupling.get("proxy_kappa_regularization_rho", 0.0)
+            ),
+            dpi=dpi,
+        )
+        paths.append(relative_denominator_path)
+
     if "proxy_residual" in diagnostics:
         residual, labels = _diagnostic_array_for_model(
             diagnostics["proxy_residual"],
@@ -288,6 +380,29 @@ def _plot_one_source(
             dpi=dpi,
         )
         paths.append(residual_path)
+
+    if "regularized_proxy_residual" in diagnostics:
+        regularized_residual, labels = _diagnostic_array_for_model(
+            diagnostics["regularized_proxy_residual"],
+            "regularized_proxy_residual",
+            model_index,
+        )
+        normalized_t = _normalized_t_axis(
+            diagnostics.get("normalized_t"),
+            regularized_residual.shape[0],
+        )
+        regularized_residual_path = plot_prefix.with_name(
+            f"{plot_prefix.name}_regularized_proxy_residual.png"
+        )
+        _plot_proxy_residual(
+            regularized_residual_path,
+            normalized_t=normalized_t,
+            residual=regularized_residual,
+            sample_labels=labels,
+            dpi=dpi,
+            stage_label="after regularization, before clamping",
+        )
+        paths.append(regularized_residual_path)
 
     if "denominator" in diagnostics:
         denominator, labels = _diagnostic_array_for_model(
@@ -544,6 +659,113 @@ def _plot_kappa(
     plt.close(fig)
 
 
+def _plot_kappa_stages(
+    path: Path,
+    *,
+    normalized_t: np.ndarray,
+    raw_kappa: np.ndarray,
+    regularized_kappa: np.ndarray,
+    applied_kappa: np.ndarray,
+    sample_labels: list[str],
+    kappa_min: float,
+    kappa_max: float,
+    dpi: int,
+) -> None:
+    """Compare raw, regularized, and applied kappa trajectories."""
+
+    fig, axes = plt.subplots(
+        3,
+        1,
+        figsize=(8.5, 9.0),
+        sharex=True,
+        constrained_layout=True,
+    )
+    stage_specs = (
+        ("Raw kappa", raw_kappa, True),
+        ("Regularized kappa before clamp", regularized_kappa, True),
+        ("Applied kappa after clamp", applied_kappa, False),
+    )
+    for ax, (title, values, use_symlog) in zip(axes, stage_specs):
+        _plot_samples(ax, normalized_t, values, sample_labels)
+        ax.axhline(0.5, color="0.45", linestyle=":", linewidth=1.2)
+        ax.axhline(kappa_min, color="0.35", linestyle="--", linewidth=1.0)
+        ax.axhline(kappa_max, color="0.35", linestyle="--", linewidth=1.0)
+        if use_symlog:
+            ax.set_yscale("symlog", linthresh=1.0)
+        ax.set_title(title)
+        ax.set_ylabel("kappa")
+        ax.grid(alpha=0.25)
+    axes[-1].set_xlabel(
+        "Normalized denoising progress t (0 = noisiest, 1 = final)"
+    )
+    axes[-1].set_xlim(0.0, 1.0)
+    axes[0].legend(loc="best", fontsize=8)
+    fig.savefig(path, dpi=dpi)
+    plt.close(fig)
+
+
+def _plot_kappa_reliability(
+    path: Path,
+    *,
+    normalized_t: np.ndarray,
+    reliability: np.ndarray,
+    sample_labels: list[str],
+    rho: float,
+    dpi: int,
+) -> None:
+    """Plot the scale-aware reliability applied to raw kappa."""
+
+    fig, ax = plt.subplots(figsize=(8.5, 5.0), constrained_layout=True)
+    _plot_samples(ax, normalized_t, reliability, sample_labels)
+    ax.axhline(0.5, color="0.45", linestyle=":", linewidth=1.2)
+    ax.set_title(f"Kappa reliability over denoising (rho={rho:g})")
+    ax.set_xlabel("Normalized denoising progress t (0 = noisiest, 1 = final)")
+    ax.set_ylabel("D / (D + rho S)")
+    ax.set_xlim(0.0, 1.0)
+    ax.set_ylim(-0.05, 1.05)
+    ax.legend(loc="best", fontsize=8)
+    ax.grid(alpha=0.25)
+    fig.savefig(path, dpi=dpi)
+    plt.close(fig)
+
+
+def _plot_relative_denominator(
+    path: Path,
+    *,
+    normalized_t: np.ndarray,
+    relative_denominator: np.ndarray,
+    sample_labels: list[str],
+    rho: float,
+    dpi: int,
+) -> None:
+    """Plot D/S, the dimensionless conditioning measure for the solve."""
+
+    positive_values = np.where(
+        relative_denominator > 0,
+        relative_denominator,
+        np.nan,
+    )
+    fig, ax = plt.subplots(figsize=(8.5, 5.0), constrained_layout=True)
+    _plot_samples(ax, normalized_t, positive_values, sample_labels)
+    if rho > 0:
+        ax.axhline(
+            rho,
+            color="0.35",
+            linestyle="--",
+            linewidth=1.0,
+            label=f"rho={rho:g} (reliability=0.5)",
+        )
+    ax.set_yscale("log")
+    ax.set_title("Relative kappa denominator over denoising")
+    ax.set_xlabel("Normalized denoising progress t (0 = noisiest, 1 = final)")
+    ax.set_ylabel("D / S")
+    ax.set_xlim(0.0, 1.0)
+    ax.legend(loc="best", fontsize=8)
+    ax.grid(alpha=0.25)
+    fig.savefig(path, dpi=dpi)
+    plt.close(fig)
+
+
 def _plot_proxy_residual(
     path: Path,
     *,
@@ -551,6 +773,7 @@ def _plot_proxy_residual(
     residual: np.ndarray,
     sample_labels: list[str],
     dpi: int,
+    stage_label: str = "after kappa clamping",
 ) -> None:
     """Plot post-clamp proxy residual trajectories."""
 
@@ -559,7 +782,7 @@ def _plot_proxy_residual(
     ax.axhline(0.0, color="0.35", linestyle="--", linewidth=1.0)
     ax.set_title("Proxy residual over denoising")
     ax.set_xlabel("Normalized denoising progress t (0 = noisiest, 1 = final)")
-    ax.set_ylabel("proxy residual after kappa clamping")
+    ax.set_ylabel(f"proxy residual {stage_label}")
     ax.set_xlim(0.0, 1.0)
     max_abs = float(np.nanmax(np.abs(residual))) if residual.size else 1.0
     max_abs = max(max_abs, 1e-6)

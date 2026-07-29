@@ -13,6 +13,11 @@ gamma_min: 1.0
 noise_scale: 1.003
 step_scale: 1.5
 kappa_atom_subset: ALL
+proxy_norm_weight: 1.0
+proxy_kappa_min: -1.0
+proxy_kappa_max: 2.0
+proxy_kappa_regularization_rho: 0.0
+proxy_eps: 1e-8
 allow_realignment: False
 use_classifier_free_guidance: False
 cfg_scale: 1.5

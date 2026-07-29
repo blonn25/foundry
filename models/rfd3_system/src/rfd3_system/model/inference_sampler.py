@@ -643,6 +643,7 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
         proxy_norm_weight: float = 1.0,
         proxy_kappa_min: float = -1.0,
         proxy_kappa_max: float = 2.0,
+        proxy_kappa_regularization_rho: float = 0.0,
         proxy_eps: float = 1e-8,
         kappa_atom_subset: str = "ALL",
         **kwargs,
@@ -651,6 +652,7 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
         self.proxy_norm_weight = proxy_norm_weight
         self.proxy_kappa_min = proxy_kappa_min
         self.proxy_kappa_max = proxy_kappa_max
+        self.proxy_kappa_regularization_rho = proxy_kappa_regularization_rho
         self.proxy_eps = proxy_eps
         self.kappa_atom_subset = normalize_kappa_atom_subset(kappa_atom_subset)
 
@@ -816,8 +818,15 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
         proxy_diag = {
             "kappa": [],
             "raw_kappa": [],
+            "regularized_kappa": [],
+            "numerator": [],
             "denominator": [],
+            "regularization_scale": [],
+            "regularized_denominator": [],
+            "relative_denominator": [],
+            "reliability": [],
             "degenerate": [],
+            "regularized_proxy_residual": [],
             "proxy_residual": [],
             "delta_1_norm": [],
             "delta_2_norm": [],
@@ -829,9 +838,15 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
         proxy_diag_fields = (
             "kappa",
             "raw_kappa",
+            "regularized_kappa",
             "numerator",
             "denominator",
+            "regularization_scale",
+            "regularized_denominator",
+            "relative_denominator",
+            "reliability",
             "degenerate",
+            "regularized_proxy_residual",
             "proxy_residual",
             "delta_1_norm",
             "delta_2_norm",
@@ -911,6 +926,7 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
                 norm_weight=self.proxy_norm_weight,
                 kappa_min=self.proxy_kappa_min,
                 kappa_max=self.proxy_kappa_max,
+                regularization_rho=self.proxy_kappa_regularization_rho,
                 eps=self.proxy_eps,
             )
             kappa_view = diag.kappa.reshape((D, 1, 1))
@@ -946,6 +962,7 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
             ):
                 kappa_values = diag.kappa.detach().cpu()
                 residual_values = diag.proxy_residual.detach().abs().cpu()
+                reliability_values = diag.reliability.detach().cpu()
                 normalized_t = float(normalized_t_values[step_num].detach().cpu())
                 ranked_logger.info(
                     "rfd3_system coupled denoising "
@@ -956,6 +973,7 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
                     f"{float(kappa_values.mean()):.3f}/"
                     f"{float(kappa_values.min()):.3f}/"
                     f"{float(kappa_values.max()):.3f} | "
+                    f"mean reliability={float(reliability_values.mean()):.3f} | "
                     f"mean |proxy_residual|={float(residual_values.mean()):.3e}"
                 )
 
@@ -1019,6 +1037,9 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
             "proxy_norm_weight": self.proxy_norm_weight,
             "proxy_kappa_min": self.proxy_kappa_min,
             "proxy_kappa_max": self.proxy_kappa_max,
+            "proxy_kappa_regularization_rho": (
+                self.proxy_kappa_regularization_rho
+            ),
             "proxy_eps": self.proxy_eps,
             "kappa_atom_subset": self.kappa_atom_subset,
             "kappa_solve_atom_count": int(shared_kappa_atom_indices_1.numel()),

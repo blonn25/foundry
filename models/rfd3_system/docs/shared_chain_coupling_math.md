@@ -383,13 +383,86 @@ kappa_raw =
     ||delta_1 - delta_2||^2
 ```
 
-The implementation then handles degenerate cases and clamps:
+### Scale-aware regularization
+
+The raw solve becomes ill-conditioned when the two track updates are nearly
+identical. Its denominator decreases quadratically with
+`delta_1 - delta_2`, while its numerator can decrease only linearly. The
+resulting `kappa_raw` can therefore become very large even when changing kappa
+has little effect on the mixed update.
+
+Define a symmetric update-magnitude scale:
+
+```text
+S = 0.5 * (||delta_1||^2 + ||delta_2||^2)
+rho = proxy_kappa_regularization_rho
+```
+
+The regularized denominator and reliability are:
+
+```text
+regularized_denominator = ||Delta||^2 + rho * S
+
+reliability =
+    ||Delta||^2
+    /
+    (||Delta||^2 + rho * S)
+```
+
+The pre-clamp regularized weight is:
+
+```text
+kappa_regularized =
+    0.5 + reliability * (kappa_raw - 0.5)
+```
+
+Substituting the raw numerator gives the equivalent expression:
+
+```text
+N = w (||delta_1||^2 - ||delta_2||^2) - <delta_2, Delta>
+D = ||Delta||^2
+
+kappa_regularized =
+    0.5 + (N - 0.5 * D) / (D + rho * S)
+```
+
+For the default `w=1`, let:
+
+```text
+delta_mean = 0.5 * (delta_1 + delta_2)
+```
+
+Then:
+
+```text
+kappa_regularized =
+    0.5
+    + <delta_mean, Delta>
+      /
+      (||Delta||^2 + rho * S)
+```
+
+This behavior has three useful limits:
+
+- `rho=0` exactly reproduces the legacy raw solve;
+- if `||Delta||^2` is much larger than `rho*S`, reliability approaches `1`
+  and regularization has little effect;
+- if `||Delta||^2` is much smaller than `rho*S`, reliability approaches `0`
+  and kappa smoothly approaches equal weighting.
+
+Nonzero rho intentionally relaxes exact proxy equalization in exchange for a
+better-conditioned update. It is dimensionless because it multiplies `S`,
+which has the same units and atom-count scaling as the original denominator.
+
+The implementation retains the literal degeneracy guard and applies the
+existing clamp after regularization:
 
 ```text
 if ||delta_1 - delta_2||^2 <= eps:
     kappa_raw = 0.5
+    kappa_regularized = 0.5
 
-kappa = clamp(kappa_raw, kappa_min, kappa_max)
+kappa = clamp(kappa_regularized, kappa_min, kappa_max)
 ```
 
 Current defaults:
@@ -399,6 +472,7 @@ eps = 1e-8
 kappa_min = -1.0
 kappa_max = 2.0
 proxy_norm_weight = 1.0
+proxy_kappa_regularization_rho = 0.0
 ```
 
 The clamped range allows extrapolation beyond a convex average. For example:
@@ -441,7 +515,16 @@ X2_next[A] = A_next
 
 ## Proxy Residual
 
-The proxy residual is computed after the final, clamped `kappa` has been chosen:
+Two residual stages are recorded. The regularized residual uses
+`kappa_regularized` before clamping:
+
+```text
+regularized_proxy_residual =
+    proxy_1(delta_mix_regularized) - proxy_2(delta_mix_regularized)
+```
+
+The final proxy residual is computed after the final, clamped `kappa` has been
+chosen:
 
 ```text
 proxy_residual = proxy_1(delta_mix) - proxy_2(delta_mix)
@@ -456,9 +539,11 @@ proxy_residual =
 ```
 
 A residual close to zero means the implemented proxy equalization equation was
-well satisfied. A large residual means the proxy condition was not well
-satisfied, commonly because:
+well satisfied. With nonzero rho, the regularized residual may intentionally
+be nonzero even when no clamp is needed. A large final residual means the proxy
+condition was not well satisfied, commonly because:
 
+- regularization deliberately shrank an ill-conditioned solve toward `0.5`;
 - `kappa_raw` was outside the allowed range and had to be clamped;
 - the denominator `||delta_1 - delta_2||^2` was small;
 - the two update proxies created an ill-conditioned local solve.
@@ -478,12 +563,16 @@ envs/esm/bin/python \
   outputs/foundry/rfd3_system/<run_dir>
 ```
 
-This reads any coupled JSON associated with each diffusion batch and writes one
-batch-level kappa PNG and one batch-level proxy-residual PNG by default:
+This reads any coupled JSON associated with each diffusion batch and writes
+batch-level diagnostic PNGs:
 
 ```text
 *_kappa.png
+*_kappa_stages.png
+*_kappa_reliability.png
+*_kappa_relative_denominator.png
 *_proxy_residual.png
+*_regularized_proxy_residual.png
 ```
 
 The kappa plot x-axis uses normalized `t` values. They increase from 0 on the
@@ -514,6 +603,12 @@ The proxy-residual PNG uses the same normalized `t` x-axis. Its y-axis is the
 post-clamp residual defined above; values closer to zero indicate that the
 implemented proxy equalization condition was better satisfied at that denoising
 step.
+
+The kappa-stages PNG compares the unregularized solve, the pre-clamp
+regularized value, and the final applied value. The reliability PNG shows the
+fraction of the raw displacement from `0.5` retained at each step. The relative
+denominator PNG plots `||Delta||^2/S` on a logarithmic scale and marks `rho`;
+the marked line corresponds to reliability `0.5`.
 
 The cosine PNGs use the same normalized `t` x-axis and a fixed y-axis of
 `[-1, 1]`. They show how aligned each track-specific shared-chain update is

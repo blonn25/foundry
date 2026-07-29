@@ -24,5 +24,6 @@ example_abc:
 #   inference_sampler.num_timesteps=20 \
 #   inference_sampler.proxy_kappa_min=-1.0 \
 #   inference_sampler.proxy_kappa_max=2.0 \
+#   inference_sampler.proxy_kappa_regularization_rho=1e-4 \
 #   track_1_specification.contig=A1-100,B1-100 \
 #   track_2_specification.contig=A1-100,C1-100

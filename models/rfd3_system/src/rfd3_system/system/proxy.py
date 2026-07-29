@@ -7,6 +7,7 @@ small stabilized proxy equation that is useful for research prototyping.
 
 from __future__ import annotations
 
+import math
 from dataclasses import dataclass
 
 import torch
@@ -17,10 +18,16 @@ class ProxyKappaDiagnostics:
     """Diagnostics from the approximate two-track weight solve."""
 
     raw_kappa: torch.Tensor
+    regularized_kappa: torch.Tensor
     kappa: torch.Tensor
     numerator: torch.Tensor
     denominator: torch.Tensor
+    regularization_scale: torch.Tensor
+    regularized_denominator: torch.Tensor
+    relative_denominator: torch.Tensor
+    reliability: torch.Tensor
     degenerate: torch.Tensor
+    regularized_proxy_residual: torch.Tensor
     proxy_residual: torch.Tensor
     delta_1_norm: torch.Tensor
     delta_2_norm: torch.Tensor
@@ -60,6 +67,7 @@ def solve_two_track_proxy_kappa(
     norm_weight: float = 1.0,
     kappa_min: float = -1.0,
     kappa_max: float = 2.0,
+    regularization_rho: float = 0.0,
     eps: float = 1e-8,
 ) -> ProxyKappaDiagnostics:
     """Solve the approximate two-track shared-chain mixing weight.
@@ -70,11 +78,24 @@ def solve_two_track_proxy_kappa(
         proxy_i(delta_mix) = <delta_mix, delta_i> - norm_weight * ||delta_i||^2
 
     and choose kappa in `delta_mix = kappa * delta_1 + (1-kappa) * delta_2`
-    so that `proxy_1(delta_mix) ~= proxy_2(delta_mix)`.  This is a heuristic
-    analogue of SuperDiff's density-control linear system; it is not the
-    Itô-density estimator and it does not use exact scores.
+    so that `proxy_1(delta_mix) ~= proxy_2(delta_mix)`.  An optional
+    dimensionless regularization strength shrinks ill-conditioned solutions
+    smoothly toward equal weighting before the final clamp:
+
+        scale = 0.5 * (||delta_1||^2 + ||delta_2||^2)
+        reliability = denominator / (denominator + regularization_rho * scale)
+        regularized_kappa = 0.5 + reliability * (raw_kappa - 0.5)
+
+    `regularization_rho=0` exactly preserves the legacy solve.  This remains a
+    heuristic analogue of SuperDiff's density-control linear system; it is not
+    the Itô-density estimator and it does not use exact scores.
     """
 
+    if not math.isfinite(regularization_rho) or regularization_rho < 0:
+        raise ValueError(
+            "regularization_rho must be finite and non-negative, got "
+            f"{regularization_rho!r}."
+        )
     if delta_1.shape != delta_2.shape:
         raise ValueError(
             f"Shared-chain update proxies must have matching shapes, got "
@@ -91,15 +112,66 @@ def solve_two_track_proxy_kappa(
     dot_2_diff = torch.sum(delta_2 * delta_diff, dim=reduce_dims)
 
     numerator = norm_weight * (norm_1_sq - norm_2_sq) - dot_2_diff
+    regularization_scale = 0.5 * (norm_1_sq + norm_2_sq)
+    regularized_denominator = (
+        denominator + regularization_rho * regularization_scale
+    )
     degenerate = denominator <= eps
-    safe_denominator = torch.where(degenerate, torch.ones_like(denominator), denominator)
+    safe_denominator = torch.where(
+        degenerate,
+        torch.ones_like(denominator),
+        denominator,
+    )
     raw_kappa = numerator / safe_denominator
     raw_kappa = torch.where(degenerate, torch.full_like(raw_kappa, 0.5), raw_kappa)
-    kappa = raw_kappa.clamp(min=kappa_min, max=kappa_max)
+
+    positive_scale = regularization_scale > 0
+    safe_scale = torch.where(
+        positive_scale,
+        regularization_scale,
+        torch.ones_like(regularization_scale),
+    )
+    relative_denominator = denominator / safe_scale
+    relative_denominator = torch.where(
+        positive_scale,
+        relative_denominator,
+        torch.zeros_like(relative_denominator),
+    )
+
+    positive_regularized_denominator = regularized_denominator > 0
+    safe_regularized_denominator = torch.where(
+        positive_regularized_denominator,
+        regularized_denominator,
+        torch.ones_like(regularized_denominator),
+    )
+    reliability = denominator / safe_regularized_denominator
+    reliability = torch.where(
+        degenerate,
+        torch.zeros_like(reliability),
+        reliability,
+    )
+
+    regularized_kappa = 0.5 + reliability * (raw_kappa - 0.5)
+    kappa = regularized_kappa.clamp(min=kappa_min, max=kappa_max)
 
     expand_shape = (kappa.shape[0],) + (1,) * (delta_1.ndim - 1)
-    delta_mix = kappa.reshape(expand_shape) * delta_1 + (
-        1 - kappa.reshape(expand_shape)
+    regularized_kappa_view = regularized_kappa.reshape(expand_shape)
+    regularized_delta_mix = regularized_kappa_view * delta_1 + (
+        1 - regularized_kappa_view
+    ) * delta_2
+    regularized_proxy_1 = (
+        torch.sum(regularized_delta_mix * delta_1, dim=reduce_dims)
+        - norm_weight * norm_1_sq
+    )
+    regularized_proxy_2 = (
+        torch.sum(regularized_delta_mix * delta_2, dim=reduce_dims)
+        - norm_weight * norm_2_sq
+    )
+    regularized_proxy_residual = regularized_proxy_1 - regularized_proxy_2
+
+    kappa_view = kappa.reshape(expand_shape)
+    delta_mix = kappa_view * delta_1 + (
+        1 - kappa_view
     ) * delta_2
     proxy_1 = torch.sum(delta_mix * delta_1, dim=reduce_dims) - norm_weight * norm_1_sq
     proxy_2 = torch.sum(delta_mix * delta_2, dim=reduce_dims) - norm_weight * norm_2_sq
@@ -107,10 +179,16 @@ def solve_two_track_proxy_kappa(
 
     return ProxyKappaDiagnostics(
         raw_kappa=raw_kappa,
+        regularized_kappa=regularized_kappa,
         kappa=kappa,
         numerator=numerator,
         denominator=denominator,
+        regularization_scale=regularization_scale,
+        regularized_denominator=regularized_denominator,
+        relative_denominator=relative_denominator,
+        reliability=reliability,
         degenerate=degenerate,
+        regularized_proxy_residual=regularized_proxy_residual,
         proxy_residual=proxy_residual,
         delta_1_norm=torch.sqrt(norm_1_sq),
         delta_2_norm=torch.sqrt(norm_2_sq),

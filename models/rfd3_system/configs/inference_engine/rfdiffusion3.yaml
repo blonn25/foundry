@@ -48,6 +48,11 @@ inference_sampler:
   gamma_min: 1.0
   s_jitter_origin: 0.0  # Sigma of gaussian noise to jitter the motif offset (equivalent to ORI token Jitter)
   kappa_atom_subset: ALL  # rfd3_system only: ALL, BKBN, or CA atoms used to solve kappa
+  proxy_norm_weight: 1.0
+  proxy_kappa_min: -1.0
+  proxy_kappa_max: 2.0
+  proxy_kappa_regularization_rho: 0.0  # Dimensionless; 0 preserves the legacy proxy solve
+  proxy_eps: 1e-8
 
 #########################################################
 # Approximate shared-chain coupling prototype.
