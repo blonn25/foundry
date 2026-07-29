@@ -114,6 +114,8 @@ clamp. Because rho multiplies the mean squared update magnitude, it is
 dimensionless and adapts to timestep and atom-subset scale. The exact equation
 and interpretation are documented in
 [docs/shared_chain_coupling_math.md](docs/shared_chain_coupling_math.md).
+The completed default/ODE/binder comparison is summarized in
+[docs/proxy_kappa_regularization_grid_001.md](docs/proxy_kappa_regularization_grid_001.md).
 
 ## Output Behavior
 
