@@ -822,8 +822,8 @@ def _plot_kappa_denominator(
     ax.set_xlim(0.0, 1.0)
     max_abs = float(np.nanmax(np.abs(denominator))) if denominator.size else 1.0
     max_abs = max(max_abs, 1e-6)
-    # ax.set_ylim(-1.05 * max_abs, 1.05 * max_abs)
-    ax.set_ylim(-0.05, 1.05)
+    ax.set_ylim(-1.05 * max_abs, 1.05 * max_abs)
+    # ax.set_ylim(-0.05, 1.05)
     ax.legend(loc="best", fontsize=12)
     ax.grid(alpha=0.25)
     fig.savefig(path, dpi=dpi)
