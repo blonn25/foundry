@@ -30,6 +30,17 @@ import matplotlib.pyplot as plt
 import numpy as np
 
 
+PREFERRED_MODE_ORDER = (
+    "default",
+    "ode",
+    "binder",
+    "gamma02_step15",
+)
+MODE_LABELS = {
+    "gamma02_step15": "gamma0.2 / step1.5",
+}
+
+
 SUMMARY_FIELDS = (
     "row_id",
     "sampling_mode",
@@ -59,6 +70,8 @@ SUMMARY_FIELDS = (
     "applied_kappa_step_variation_mean",
     "cosine_track1_mix_median",
     "cosine_track2_mix_median",
+    "late_track_delta_cosine_median",
+    "late_worst_track_mix_cosine_median",
     "cif_count",
     "diagnostic_json",
 )
@@ -156,6 +169,32 @@ def _summarize_run(metadata_path: Path) -> dict[str, Any]:
         diagnostics,
         "cosine_delta_2_mix_all_shared",
     )
+    delta_1_norm = _array(diagnostics, "delta_1_norm")
+    delta_2_norm = _array(diagnostics, "delta_2_norm")
+    _require_same_shape(raw, delta_1_norm, delta_2_norm)
+    normalized_t = np.asarray(diagnostics["normalized_t"], dtype=float)
+    if normalized_t.ndim != 1 or normalized_t.shape[0] != raw.shape[0]:
+        raise ValueError(
+            "Diagnostic normalized_t must contain one value per denoising step; "
+            f"got {normalized_t.shape} for kappa shape {raw.shape}."
+        )
+    late_mask = normalized_t >= 0.8
+    if not np.any(late_mask):
+        raise ValueError("No diagnostics found in the late window t >= 0.8.")
+
+    proxy_eps = float(coupling.get("proxy_eps", 1e-8))
+    track_dot = 0.5 * (
+        np.square(delta_1_norm)
+        + np.square(delta_2_norm)
+        - denominator
+    )
+    track_delta_cosine = track_dot / (
+        delta_1_norm * delta_2_norm + proxy_eps
+    )
+    if cosine_1 is None or cosine_2 is None:
+        late_worst_track_mix_cosine = None
+    else:
+        late_worst_track_mix_cosine = np.minimum(cosine_1, cosine_2)[late_mask]
 
     return {
         "row_id": metadata["row_id"],
@@ -206,6 +245,12 @@ def _summarize_run(metadata_path: Path) -> dict[str, Any]:
         "applied_kappa_step_variation_mean": _mean_step_variation(applied),
         "cosine_track1_mix_median": _nanmedian(cosine_1),
         "cosine_track2_mix_median": _nanmedian(cosine_2),
+        "late_track_delta_cosine_median": _nanmedian(
+            track_delta_cosine[late_mask]
+        ),
+        "late_worst_track_mix_cosine_median": _nanmedian(
+            late_worst_track_mix_cosine
+        ),
         "cif_count": len(list(run_dir.glob("*.cif*"))),
         "diagnostic_json": str(diagnostic_path),
     }
@@ -301,6 +346,16 @@ def _write_summary_plots(
             "Median |final proxy residual| / S",
             "proxy_kappa_regularization_residual.png",
         ),
+        (
+            "late_track_delta_cosine_median",
+            "Median late cos(delta_1, delta_2)",
+            "proxy_kappa_regularization_late_track_agreement.png",
+        ),
+        (
+            "late_worst_track_mix_cosine_median",
+            "Median late worst-track cos(delta_i, delta_mix)",
+            "proxy_kappa_regularization_late_mix_alignment.png",
+        ),
     )
     paths = []
     for field, ylabel, filename in specs:
@@ -321,7 +376,12 @@ def _plot_metric_by_rho(
     labels = [f"{rho:g}" for rho in rho_values]
     x = np.arange(len(rho_values), dtype=float)
     fig, ax = plt.subplots(figsize=(7.5, 4.8), constrained_layout=True)
-    for mode in ("default", "ode", "binder"):
+    available_modes = {str(row["sampling_mode"]) for row in rows}
+    ordered_modes = [
+        mode for mode in PREFERRED_MODE_ORDER if mode in available_modes
+    ]
+    ordered_modes.extend(sorted(available_modes - set(ordered_modes)))
+    for mode in ordered_modes:
         by_rho = {
             float(row["rho"]): float(row[field])
             for row in rows
@@ -330,7 +390,13 @@ def _plot_metric_by_rho(
         if not by_rho:
             continue
         values = [by_rho.get(rho, math.nan) for rho in rho_values]
-        ax.plot(x, values, marker="o", linewidth=1.8, label=mode)
+        ax.plot(
+            x,
+            values,
+            marker="o",
+            linewidth=1.8,
+            label=MODE_LABELS.get(mode, mode),
+        )
     ax.set_xticks(x, labels)
     ax.set_xlabel("proxy_kappa_regularization_rho")
     ax.set_ylabel(ylabel)
@@ -358,8 +424,9 @@ def _write_markdown(
         "## Conditions",
         "",
         "| Mode | rho | Final clamp fraction | Median reliability | "
-        "Median normalized residual | Applied-kappa variation |",
-        "|---|---:|---:|---:|---:|---:|",
+        "Median normalized residual | Applied-kappa variation | "
+        "Late track agreement | Late worst-track alignment |",
+        "|---|---:|---:|---:|---:|---:|---:|---:|",
     ]
     for row in rows:
         lines.append(
@@ -367,7 +434,9 @@ def _write_markdown(
             f"{row['final_clamped_fraction']:.4f} | "
             f"{row['reliability_median']:.4f} | "
             f"{row['normalized_final_residual_median']:.3e} | "
-            f"{row['applied_kappa_step_variation_mean']:.4f} |"
+            f"{row['applied_kappa_step_variation_mean']:.4f} | "
+            f"{row['late_track_delta_cosine_median']:.4f} | "
+            f"{row['late_worst_track_mix_cosine_median']:.4f} |"
         )
     lines.extend(["", "## Cross-Grid Plots", ""])
     lines.extend(f"- `{plot.name}`" for plot in plot_paths)
