@@ -29,6 +29,21 @@ def test_alignment_and_directional_rmsd_primitives() -> None:
     assert metrics.rmsd(mobile, target) > 1.0
 
 
+def test_finite_pdb_conversion_drops_nonfinite_atoms(tmp_path: Path) -> None:
+    pdb = tmp_path / "input.pdb"
+    pdb.write_text(
+        "ATOM      1  N   ALA A   1       0.000   0.000   0.000  1.00  0.00           N  \n"
+        "ATOM      2  CA  ALA A   1         nan   1.000   1.000  1.00  0.00           C  \n"
+        "ATOM      3  C   ALA A   1       2.000   0.000   0.000  1.00  0.00           C  \n"
+        "TER\nEND\n"
+    )
+    output = metrics.convert_structure_to_finite_pdb(pdb, tmp_path / "output.pdb")
+    text = output.read_text()
+    assert " N   ALA" in text
+    assert " C   ALA" in text
+    assert " CA  ALA" not in text
+
+
 def test_fold_state_parser_and_task_seed_are_stable() -> None:
     assert folding.parse_states("AB_SEP,DC_SER") == {"AB_SEP", "DC_SER"}
     assert folding.parse_states(None) is None

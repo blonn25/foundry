@@ -183,6 +183,34 @@ def pose_chain_residues(pose: Any, chain_id: str) -> list[int]:
     ]
 
 
+def convert_structure_to_finite_pdb(input_path: Path, output_path: Path) -> Path:
+    """Convert a PDB/mmCIF to PDB while omitting non-finite-coordinate atoms.
+
+    PyRosetta 2026 loads RFD3's compressed CIF outputs as empty poses. Biopython
+    correctly reads those files, and the resulting PDB retains chain/residue
+    labels plus SEP records in a representation PyRosetta accepts.
+    """
+
+    from Bio.PDB import MMCIFParser, PDBIO, PDBParser, Select
+
+    class FiniteAtomSelect(Select):
+        def accept_atom(self, atom: Any) -> int:
+            return int(np.isfinite(np.asarray(atom.coord, dtype=float)).all())
+
+    parser = (
+        MMCIFParser(QUIET=True)
+        if input_path.name.endswith((".cif", ".cif.gz", ".mmcif", ".mmcif.gz"))
+        else PDBParser(QUIET=True)
+    )
+    with open_text(input_path) as handle:
+        structure = parser.get_structure("threading_input", handle)
+    output_path.parent.mkdir(parents=True, exist_ok=True)
+    writer = PDBIO()
+    writer.set_structure(structure)
+    writer.save(str(output_path), FiniteAtomSelect())
+    return output_path
+
+
 def thread_track_structure(
     input_path: Path,
     output_path: Path,
@@ -197,7 +225,13 @@ def thread_track_structure(
     pr = init_pyrosetta_once()
     from pyrosetta.rosetta.protocols.simple_moves import MutateResidue
 
-    pose = pr.pose_from_file(str(normalize_path(input_path)))
+    input_path = normalize_path(input_path)
+    pose_input = input_path
+    if input_path.name.endswith((".cif", ".cif.gz", ".mmcif", ".mmcif.gz")):
+        pose_input = convert_structure_to_finite_pdb(input_path, output_path)
+    pose = pr.pose_from_file(str(pose_input))
+    if pose.total_residue() == 0:
+        raise ValueError(f"PyRosetta loaded zero residues from {pose_input}")
     pdb_info = pose.pdb_info()
     for input_chain, output_chain in chain_mapping.items():
         pose_indices = pose_chain_residues(pose, input_chain)
