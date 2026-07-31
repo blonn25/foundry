@@ -44,6 +44,33 @@ def test_finite_pdb_conversion_drops_nonfinite_atoms(tmp_path: Path) -> None:
     assert " CA  ALA" not in text
 
 
+def test_relax_structure_creates_destination_directory(
+    tmp_path: Path, monkeypatch
+) -> None:
+    input_path = tmp_path / "input.pdb"
+    output_path = tmp_path / "nested" / "relaxed.pdb"
+    observed: dict[str, bool] = {}
+
+    def fake_relax(source: Path, destination: Path, **kwargs) -> None:
+        observed["parent_exists"] = destination.parent.is_dir()
+
+    monkeypatch.setattr(metrics, "pr_relax", fake_relax)
+    metrics.relax_structure(
+        input_path,
+        output_path,
+        {
+            "fast_relax": {
+                "max_iterations": 200,
+                "backbone_movable": True,
+                "sidechains_movable": True,
+                "jumps_movable": False,
+                "constrain_to_start_coordinates": True,
+            }
+        },
+    )
+    assert observed["parent_exists"]
+
+
 def test_fold_state_parser_and_task_seed_are_stable() -> None:
     assert folding.parse_states("AB_SEP,DC_SER") == {"AB_SEP", "DC_SER"}
     assert folding.parse_states(None) is None

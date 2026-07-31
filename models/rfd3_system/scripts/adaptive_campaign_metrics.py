@@ -274,6 +274,7 @@ def relax_structure(
     input_path: Path, output_path: Path, config: dict[str, Any]
 ) -> None:
     settings = config["fast_relax"]
+    output_path.parent.mkdir(parents=True, exist_ok=True)
     pr_relax(
         input_path,
         output_path,
