@@ -11,6 +11,7 @@ sys.path.insert(0, str(SCRIPTS))
 
 
 import adaptive_campaign_metrics as metrics  # noqa: E402
+import build_tied_mpnn_input as tied_input  # noqa: E402
 import fold_mpnn_esmfold2 as folding  # noqa: E402
 
 
@@ -27,6 +28,31 @@ def test_alignment_and_directional_rmsd_primitives() -> None:
     mobile = target + np.asarray([10.0, -4.0, 2.0])
     assert metrics.aligned_rmsd(mobile, target) < 1e-10
     assert metrics.rmsd(mobile, target) > 1.0
+
+
+def test_ca_radius_of_gyration_and_limit() -> None:
+    coords = np.asarray([[-1.0, 0.0, 0.0], [1.0, 0.0, 0.0]])
+    assert metrics.ca_radius_of_gyration(coords) == 1.0
+    assert metrics.radius_of_gyration_limit(100) == 0.395 * 100**0.6 + 10.0
+
+
+def test_discovers_rfd_track_structure_pairs(tmp_path: Path) -> None:
+    for track in (1, 2):
+        (tmp_path / f"example_0_track{track}_model_3.cif.gz").touch()
+    assert metrics.discover_rfd_track_structures(tmp_path) == [
+        (
+            3,
+            tmp_path / "example_0_track1_model_3.cif.gz",
+            tmp_path / "example_0_track2_model_3.cif.gz",
+        )
+    ]
+
+
+def test_loads_selected_rfd_model_indices(tmp_path: Path) -> None:
+    selection = tmp_path / "selection.json"
+    selection.write_text('{"model_indices": [0, 2, 2]}\n')
+    assert tied_input.load_model_indices(selection) == {0, 2}
+    assert tied_input.load_model_indices(None) is None
 
 
 def test_finite_pdb_conversion_drops_nonfinite_atoms(tmp_path: Path) -> None:

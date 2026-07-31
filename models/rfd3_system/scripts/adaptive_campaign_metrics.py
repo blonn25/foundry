@@ -66,6 +66,9 @@ STAGE_KINDS = {
 }
 STRUCTURE_SUFFIXES = (".pdb", ".cif", ".cif.gz", ".mmcif", ".mmcif.gz")
 LABEL_RE = re.compile(r"^(?P<chain>[A-Za-z]+)(?P<resid>-?\d+)[A-Za-z]*$")
+RFD_TRACK_RE = re.compile(
+    r"(?P<prefix>.+)_track(?P<track>[12])_model_(?P<model>\d+)$"
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -76,6 +79,11 @@ def parse_args() -> argparse.Namespace:
     prefilter.add_argument("mpnn_output_dir", type=Path)
     prefilter.add_argument("--round-dir", type=Path, required=True)
     prefilter.add_argument("--config", type=Path, required=True)
+
+    geometry = subparsers.add_parser("rfd-geometry-prefilter")
+    geometry.add_argument("rfd_output_dir", type=Path)
+    geometry.add_argument("--round-dir", type=Path, required=True)
+    geometry.add_argument("--config", type=Path, required=True)
 
     for command, stage in (
         ("score-on-target", "on_target"),
@@ -335,17 +343,29 @@ def ca_records(path: Path, chain_id: str) -> tuple[list[int], np.ndarray]:
     return [item[0] for item in records], np.stack([item[1] for item in records])
 
 
+def ca_radius_of_gyration(coords: np.ndarray) -> float:
+    """Return C-alpha radius of gyration for one finite coordinate array."""
+
+    center = coords.mean(axis=0)
+    return float(np.sqrt(np.mean(np.sum((coords - center) ** 2, axis=1))))
+
+
+def radius_of_gyration_limit(length: int) -> float:
+    """Return the campaign's length-dependent monomer compactness limit."""
+
+    return 0.395 * length**0.6 + 10.0
+
+
 def monomer_metrics(path: Path, chain_id: str) -> dict[str, Any]:
     residue_ids, coords = ca_records(path, chain_id)
-    center = coords.mean(axis=0)
-    radius = float(np.sqrt(np.mean(np.sum((coords - center) ** 2, axis=1))))
+    radius = ca_radius_of_gyration(coords)
     return {
         "length": len(residue_ids),
         "surface_hydrophobicity": float(
             score_monomer_surface_hydrophobicity(path, chain_id)
         ),
         "radius_of_gyration": radius,
-        "radius_of_gyration_limit": 0.395 * len(residue_ids) ** 0.6 + 10.0,
+        "radius_of_gyration_limit": radius_of_gyration_limit(len(residue_ids)),
     }
 
 
@@ -468,6 +488,121 @@ def criterion(value: Any, operator: str, threshold: float) -> dict[str, Any]:
         "threshold": threshold,
         "pass": passed,
     }
+
+
+def strip_structure_suffix(path: Path) -> str:
+    """Return a structure filename without its recognized compound suffix."""
+
+    for suffix in sorted(STRUCTURE_SUFFIXES, key=len, reverse=True):
+        if path.name.endswith(suffix):
+            return path.name[: -len(suffix)]
+    return path.stem
+
+
+def discover_rfd_track_structures(
+    output_dir: Path,
+) -> list[tuple[int, Path, Path]]:
+    """Discover paired track CIFs without importing the Foundry container stack."""
+
+    records: dict[tuple[str, int], dict[str, Path]] = {}
+    for path in sorted(output_dir.iterdir()):
+        if not path.is_file() or not path.name.endswith(STRUCTURE_SUFFIXES):
+            continue
+        match = RFD_TRACK_RE.fullmatch(strip_structure_suffix(path))
+        if match is None:
+            continue
+        key = (match.group("prefix"), int(match.group("model")))
+        records.setdefault(key, {})[match.group("track")] = path
+
+    pairs: list[tuple[int, Path, Path]] = []
+    for (_, model_index), tracks in sorted(
+        records.items(), key=lambda item: item[0][1]
+    ):
+        if set(tracks) != {"1", "2"}:
+            raise ValueError(f"Incomplete RFD track pair for model {model_index}")
+        pairs.append((model_index, tracks["1"], tracks["2"]))
+    if not pairs:
+        raise ValueError(f"No paired RFD track structures found in {output_dir}")
+    return pairs
+
+
+def rfd_geometry_prefilter(args: argparse.Namespace) -> None:
+    """Reject noncompact raw RFD backbones before sequence design."""
+
+    config = load_config(args.config)
+    enabled = bool(
+        config.get("filters", {}).get("rfd_geometry", {}).get("enabled", True)
+    )
+    round_dir = args.round_dir.resolve()
+    metrics_dir = round_dir / "rfd_geometry"
+    passing: list[int] = []
+    pairs = discover_rfd_track_structures(args.rfd_output_dir.resolve())
+
+    for model_index, track1, track2 in pairs:
+        checks: dict[str, Any] = {}
+        chains: dict[str, Any] = {}
+        error = ""
+        try:
+            for label, path, chain_id in (
+                ("track1.A", track1, "A"),
+                ("track1.B", track1, "B"),
+                ("track2.A", track2, "A"),
+                ("track2.C", track2, "C"),
+            ):
+                residue_ids, coords = ca_records(path, chain_id)
+                radius = ca_radius_of_gyration(coords)
+                limit = radius_of_gyration_limit(len(residue_ids))
+                check = criterion(radius, "lt", limit)
+                check["would_pass"] = check["pass"]
+                if not enabled:
+                    check["pass"] = True
+                checks[label] = check
+                chains[label] = {
+                    "chain_id": chain_id,
+                    "length": len(residue_ids),
+                    "radius_of_gyration": radius,
+                    "radius_of_gyration_limit": limit,
+                    "source": str(path),
+                }
+            passed = all(check["pass"] for check in checks.values())
+        except Exception as exc:
+            passed = False
+            error = str(exc)
+
+        payload = {
+            "stage": "rfd_geometry_prefilter",
+            "model_index": model_index,
+            "filter_enabled": enabled,
+            "pass": passed,
+            "checks": checks,
+            "chains": chains,
+        }
+        if error:
+            payload["error"] = error
+        atomic_write_json(metrics_dir / f"model_{model_index}.json", payload)
+        if passed:
+            passing.append(model_index)
+
+    atomic_write_json(
+        round_dir / "passing_rfd_geometry.json",
+        {
+            "stage": "rfd_geometry_prefilter",
+            "filter_enabled": enabled,
+            "total": len(pairs),
+            "count": len(passing),
+            "model_indices": passing,
+        },
+    )
+    print(
+        json.dumps(
+            {
+                "stage": "rfd_geometry_prefilter",
+                "total": len(pairs),
+                "passing": len(passing),
+                "filter_enabled": enabled,
+            }
+        )
+    )
 
 
 def apply_prefilters(
@@ -888,6 +1023,9 @@ def build_promotion_manifest(args: argparse.Namespace) -> None:
         candidates = {
             "metrics.json": metrics_path(round_dir, design_key),
             "sequence.fasta": Path(metrics["sequence_fasta"]),
+            "rfd3/geometry_metrics.json": (
+                round_dir / "rfd_geometry" / f"model_{metrics['model_index']}.json"
+            ),
             "rfd3/track1.cif.gz": Path(metrics["rfd3_track1_cif"]),
             "rfd3/track2.cif.gz": Path(metrics["rfd3_track2_cif"]),
         }
@@ -947,7 +1085,9 @@ def cleanup_round(args: argparse.Namespace) -> None:
 
 def main() -> None:
     args = parse_args()
-    if args.command == "prefilter":
+    if args.command == "rfd-geometry-prefilter":
+        rfd_geometry_prefilter(args)
+    elif args.command == "prefilter":
         prefilter(args)
     elif args.command.startswith("score-"):
         score_stage(args)

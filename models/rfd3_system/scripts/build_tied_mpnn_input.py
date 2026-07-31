@@ -60,6 +60,14 @@ def parse_args() -> argparse.Namespace:
         help="Directory containing rfd3_system track1/track2 CIF and JSON outputs.",
     )
     parser.add_argument(
+        "--model-indices-json",
+        type=Path,
+        help=(
+            "Optional JSON mapping with a model_indices list. Only the selected "
+            "paired RFD models are prepared for sequence design."
+        ),
+    )
+    parser.add_argument(
         "--out-dir",
         type=Path,
         required=True,
@@ -220,6 +228,20 @@ def load_atom_array(path: Path) -> AtomArray:
 def load_json(path: Path) -> dict[str, Any]:
     with path.open() as handle:
         return json.load(handle)
+
+
+def load_model_indices(path: Path | None) -> set[int] | None:
+    """Load an optional explicit RFD model-index selection."""
+
+    if path is None:
+        return None
+    payload = load_json(path)
+    values = payload.get("model_indices")
+    if not isinstance(values, list) or any(
+        isinstance(value, bool) or not isinstance(value, int) for value in values
+    ):
+        raise ValueError(f"{path} must contain an integer model_indices list")
+    return set(values)
 
 
 def strip_structure_suffix(path: Path) -> Path:
@@ -643,6 +665,7 @@ def write_mpnn_outputs(out_dir: Path, inputs: list[dict[str, Any]], manifest: di
         "combined_input_dir": manifest["combined_input_dir"],
         "config_path": str(config_path),
         "model_count": manifest["model_count"],
+        "model_indices_json": manifest["model_indices_json"],
         "temperature": manifest["temperature"],
         "structure_noise": manifest["structure_noise"],
         "entries": manifest["entries"],
@@ -687,6 +710,18 @@ def main() -> None:
     fixed_a_sources = expand_component_list(args.fixed_a_source_residues)
     fixed_b_sources = expand_component_list(args.fixed_b_source_residues)
     pairs = discover_track_pairs(output_dir)
+    selected_model_indices = load_model_indices(args.model_indices_json)
+    if selected_model_indices is not None:
+        available = {pair.model_index for pair in pairs}
+        missing = selected_model_indices - available
+        if missing:
+            raise ValueError(
+                "Selected RFD model indices are unavailable: "
+                + ", ".join(map(str, sorted(missing)))
+            )
+        pairs = [pair for pair in pairs if pair.model_index in selected_model_indices]
+        if not pairs:
+            raise ValueError("The model-index selection contains no RFD models")
     name_prefix = args.name_prefix or pairs[0].prefix
 
     inputs: list[dict[str, Any]] = []
@@ -709,6 +744,9 @@ def main() -> None:
         "rfd3_output_dir": str(output_dir),
         "combined_input_dir": str(combined_dir),
         "model_count": len(inputs),
+        "model_indices_json": (
+            str(args.model_indices_json) if args.model_indices_json else ""
+        ),
         "entries": manifest_entries,
     }
     if args.prepare_for == "mpnn":
