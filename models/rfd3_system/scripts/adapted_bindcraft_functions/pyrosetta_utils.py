@@ -211,6 +211,41 @@ def score_interface(pdb_file, target_chain="A", binder_chain="B"):
     return interface_scores, interface_AA, interface_residues_pdb_ids_str
 
 
+def score_monomer_surface_hydrophobicity(pdb_file, chain_id):
+    """Return BindCraft's exposed-hydrophobe fraction for one explicit chain.
+
+    BindCraft computes this value for the binder selected by ``score_interface``.
+    The adaptive system campaign evaluates every monomer independently, so this
+    small extraction applies the same LayerSelector and residue classification
+    without assigning target/binder roles.
+    """
+
+    pr = init_pyrosetta_once()
+    pose = pr.pose_from_file(str(pdb_file))
+    chains = {
+        pose.pdb_info().chain(pose.conformation().chain_begin(index)): chain_pose
+        for index, chain_pose in zip(range(1, pose.num_chains() + 1), pose.split_by_chain())
+    }
+    if chain_id not in chains:
+        raise ValueError(f"Chain {chain_id!r} is absent from {pdb_file}")
+
+    chain_pose = chains[chain_id]
+    selector = pr.rosetta.core.select.residue_selector.LayerSelector()
+    selector.set_layers(pick_core=False, pick_boundary=False, pick_surface=True)
+    surface_residues = selector.apply(chain_pose)
+
+    hydrophobic = 0
+    total = 0
+    for residue_index in range(1, len(surface_residues) + 1):
+        if not surface_residues[residue_index]:
+            continue
+        residue = chain_pose.residue(residue_index)
+        if residue.is_apolar() or residue.name3() in {"PHE", "TRP", "TYR"}:
+            hydrophobic += 1
+        total += 1
+    return hydrophobic / total if total else 0.0
+
+
 # align pdbs to have same orientation
 def align_pdbs(reference_pdb, align_pdb, reference_chain_id, align_chain_id):
     pr = init_pyrosetta_once()
@@ -280,7 +315,17 @@ def unaligned_rmsd(reference_pdb, align_pdb, reference_chain_id, align_chain_id)
 
 
 # Relax designed structure
-def pr_relax(pdb_file, relaxed_pdb_path):
+def pr_relax(
+    pdb_file,
+    relaxed_pdb_path,
+    *,
+    max_iterations=200,
+    backbone_movable=True,
+    sidechains_movable=True,
+    jumps_movable=False,
+    constrain_to_start_coordinates=True,
+):
+    """Run BindCraft-style FastRelax with backward-compatible defaults."""
     pr = init_pyrosetta_once()
     from pyrosetta.rosetta.core.kinematics import MoveMap
     from pyrosetta.rosetta.protocols.relax import FastRelax
@@ -293,18 +338,18 @@ def pr_relax(pdb_file, relaxed_pdb_path):
 
         ### Generate movemaps
         mmf = MoveMap()
-        mmf.set_chi(True) # enable sidechain movement
-        mmf.set_bb(True) # enable backbone movement, can be disabled to increase speed by 30% but makes metrics look worse on average
-        mmf.set_jump(False) # disable whole chain movement
+        mmf.set_chi(sidechains_movable) # enable sidechain movement
+        mmf.set_bb(backbone_movable) # backbone minimization improves metrics but costs runtime
+        mmf.set_jump(jumps_movable) # keep chain placement fixed by default
 
         # Run FastRelax
         fastrelax = FastRelax()
         scorefxn = pr.get_fa_scorefxn()
         fastrelax.set_scorefxn(scorefxn)
         fastrelax.set_movemap(mmf) # set MoveMap
-        fastrelax.max_iter(200) # default iterations is 2500
+        fastrelax.max_iter(max_iterations) # Rosetta's default is much larger
         fastrelax.min_type("lbfgs_armijo_nonmonotone")
-        fastrelax.constrain_relax_to_start_coords(True)
+        fastrelax.constrain_relax_to_start_coords(constrain_to_start_coordinates)
         fastrelax.apply(pose)
 
         # Align relaxed structure to original trajectory

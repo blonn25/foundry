@@ -50,6 +50,8 @@ docs/examples/superdiff_shared_chain_proxy.yaml
 scripts/plot_coupling_diagnostics.py     Post-run Matplotlib diagnostics plotter
 scripts/build_tied_mpnn_input.py         Build separated A+B / D+C tied-MPNN inputs
 scripts/fold_tied_mpnn_designability.py  Fold only tied A+B and D+C complexes
+scripts/fold_mpnn_esmfold2.py             Fold selected tied-MPNN states with local ESMFold2
+scripts/adaptive_campaign_metrics.py      Thread, relax, filter, and package adaptive rounds
 archived/                                Upstream RFD3 docs/assets kept for reference only
 ```
 
@@ -166,6 +168,20 @@ contains cosine diagnostics, even when `merged_output_policy=none`. Use
 `--model-index N` to create a one-off plot set for a single generated model.
 Cosine plots show at most the first three batch samples by default; use
 `--max-cosine-samples N` to change this.
+
+For staged campaigns, `fold_mpnn_esmfold2.py` accepts `--states` and
+`--design-keys-json` so on-target dimers, monomers, and off-target dimers can
+be folded only after the preceding filter passes. `--resume` skips complete
+task outputs, and `--derive-task-seeds` derives stable per-task seeds from the
+specified base seed. Omitting these options preserves the historical behavior
+of folding all eight states.
+
+`adaptive_campaign_metrics.py` supports the top-level
+`pipeline/adaptive_campaign_001` workflow. It threads ProteinMPNN sequences
+onto the original track-specific RFD structures, preserves fixed SEP/SER motif
+chemistry, runs configurable BindCraft-style FastRelax, computes interface,
+monomer, phosphate-contact, and directional RMSD filters, and writes one JSON
+record per sequence design.
 
 During coupled inference, the sampler logs periodic progress lines with the
 step count, normalized `t`, `t_hat`, kappa mean/min/max, and mean absolute

@@ -16,6 +16,7 @@ from __future__ import annotations
 import argparse
 import csv
 import gzip
+import hashlib
 import json
 import os
 import re
@@ -105,7 +106,9 @@ def parse_args() -> argparse.Namespace:
         type=Path,
         help="ProteinMPNN output directory containing tied_mpnn_manifest.json and FASTA files.",
     )
-    parser.add_argument("--out-dir", type=Path, required=True, help="ESMFold2 output directory.")
+    parser.add_argument(
+        "--out-dir", type=Path, required=True, help="ESMFold2 output directory."
+    )
     parser.add_argument(
         "--prefilter-summary",
         type=Path,
@@ -126,6 +129,35 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--num-sampling-steps", type=int, default=None)
     parser.add_argument("--num-diffusion-samples", type=int, default=None)
     parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument(
+        "--derive-task-seeds",
+        action="store_true",
+        help=(
+            "Treat --seed as a base seed and derive a stable seed for each fold task. "
+            "This avoids making task seeds depend on filtering or execution order."
+        ),
+    )
+    parser.add_argument(
+        "--states",
+        default=None,
+        help=(
+            "Optional comma-separated subset of AB_SEP,DC_SER,AC_SEP,DB_SER,"
+            "A_SEP,D_SER,B,C. The default retains the historical all-eight-states behavior."
+        ),
+    )
+    parser.add_argument(
+        "--design-keys-json",
+        type=Path,
+        help=(
+            "Optional JSON list, or mapping with a design_keys list, selecting ProteinMPNN "
+            "design keys to fold."
+        ),
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip fold tasks that already have a complete task JSON and all referenced CIFs.",
+    )
     parser.add_argument("--noise-scale", type=float, default=None)
     parser.add_argument("--step-scale", type=float, default=None)
     parser.add_argument("--max-inference-sigma", type=float, default=None)
@@ -169,12 +201,16 @@ def load_manifest(mpnn_output_dir: Path) -> dict[str, ManifestEntry]:
             fixed_a_source_residues=list(raw_entry["fixed_a_source_residues"]),
             fixed_residues=list(raw_entry["fixed_residues"]),
             chain_order=list(raw_entry["chain_order"]),
-            chain_lengths={str(k): int(v) for k, v in raw_entry["chain_lengths"].items()},
+            chain_lengths={
+                str(k): int(v) for k, v in raw_entry["chain_lengths"].items()
+            },
             track1_cif=str(raw_entry["track1_cif"]),
             track2_cif=str(raw_entry["track2_cif"]),
         )
     if not entries:
-        raise ValueError(f"No entries found in {mpnn_output_dir / 'tied_mpnn_manifest.json'}")
+        raise ValueError(
+            f"No entries found in {mpnn_output_dir / 'tied_mpnn_manifest.json'}"
+        )
     return entries
 
 
@@ -291,7 +327,9 @@ def chain_sequences_for_record(
 
     if mpnn_cif.is_file():
         chains = load_chain_sequences_from_structure(mpnn_cif)
-        missing = [chain_id for chain_id in entry.chain_lengths if chain_id not in chains]
+        missing = [
+            chain_id for chain_id in entry.chain_lengths if chain_id not in chains
+        ]
         if missing:
             raise ValueError(
                 f"{mpnn_cif} is missing expected chain(s): {', '.join(missing)}"
@@ -309,7 +347,9 @@ def chain_sequences_for_record(
     return split_sequence(fasta_sequence, entry)
 
 
-def load_mpnn_records(mpnn_output_dir: Path, manifest: dict[str, ManifestEntry]) -> list[MpnnRecord]:
+def load_mpnn_records(
+    mpnn_output_dir: Path, manifest: dict[str, ManifestEntry]
+) -> list[MpnnRecord]:
     records: list[MpnnRecord] = []
     for fasta_path in sorted(mpnn_output_dir.glob("*.fa")):
         for header_name, sequence, meta in parse_fasta(fasta_path):
@@ -345,7 +385,10 @@ def load_mpnn_records(mpnn_output_dir: Path, manifest: dict[str, ManifestEntry])
             )
     if not records:
         raise ValueError(f"No MPNN FASTA records found in {mpnn_output_dir}")
-    return sorted(records, key=lambda item: (item.model_index, item.batch_index, item.design_index))
+    return sorted(
+        records,
+        key=lambda item: (item.model_index, item.batch_index, item.design_index),
+    )
 
 
 def load_prefilter_pass_set(path: Path | None) -> set[str]:
@@ -366,7 +409,9 @@ def parse_residue_label(value: str) -> tuple[str, int]:
 def fixed_shared_label_pairs(entry: ManifestEntry) -> list[tuple[str, str]]:
     n_fixed_a = len(entry.fixed_a_source_residues)
     if len(entry.fixed_residues) < 2 * n_fixed_a:
-        raise ValueError(f"fixed_residues for {entry.mpnn_name} lacks A and D fixed residues.")
+        raise ValueError(
+            f"fixed_residues for {entry.mpnn_name} lacks A and D fixed residues."
+        )
     pairs: list[tuple[str, str]] = []
     for source_idx in range(n_fixed_a):
         a_label = entry.fixed_residues[source_idx]
@@ -386,10 +431,14 @@ def mapped_sep_labels(entry: ManifestEntry, source_residue: str) -> tuple[str, s
         raise ValueError(
             f"{source_residue!r} is absent from fixed_a_source_residues for {entry.mpnn_name}."
         )
-    return fixed_shared_label_pairs(entry)[entry.fixed_a_source_residues.index(source_residue)]
+    return fixed_shared_label_pairs(entry)[
+        entry.fixed_a_source_residues.index(source_residue)
+    ]
 
 
-def replace_sequence_residue(sequence: str, position_one_based: int, residue: str) -> str:
+def replace_sequence_residue(
+    sequence: str, position_one_based: int, residue: str
+) -> str:
     index = position_one_based - 1
     return sequence[:index] + residue + sequence[index + 1 :]
 
@@ -404,7 +453,9 @@ def validate_shared_sequences(record: MpnnRecord, entry: ManifestEntry) -> None:
         _, a_resid = parse_residue_label(a_label)
         _, d_resid = parse_residue_label(d_label)
         if a_resid != d_resid:
-            raise ValueError(f"A/D fixed labels do not share a residue index: {a_label}, {d_label}")
+            raise ValueError(
+                f"A/D fixed labels do not share a residue index: {a_label}, {d_label}"
+            )
         allowed_differences.add(a_resid)
     unexpected = [
         idx
@@ -412,13 +463,16 @@ def validate_shared_sequences(record: MpnnRecord, entry: ManifestEntry) -> None:
         if a_res != d_res and idx not in allowed_differences
     ]
     if unexpected:
-        raise ValueError(f"{record.design_key} has untied A/D differences at {unexpected}.")
+        raise ValueError(
+            f"{record.design_key} has untied A/D differences at {unexpected}."
+        )
 
 
 def build_fold_tasks(
     records: Iterable[MpnnRecord],
     manifest: dict[str, ManifestEntry],
     sep_source_residue: str,
+    states: set[str] | None = None,
 ) -> list[FoldTask]:
     parse_source_residue(sep_source_residue)
     tasks: list[FoldTask] = []
@@ -452,6 +506,8 @@ def build_fold_tasks(
             ("C", {"C": chains["C"]}, None, None),
         ]
         for complex_kind, task_chains, sep_chain, sep_resid in task_defs:
+            if states is not None and complex_kind not in states:
+                continue
             tasks.append(
                 FoldTask(
                     task_id=f"{base}_{complex_kind}",
@@ -460,7 +516,9 @@ def build_fold_tasks(
                     chains=task_chains,
                     sep_chain=sep_chain,
                     sep_residue_one_based=sep_resid,
-                    sep_position_zero_based=None if sep_resid is None else sep_resid - 1,
+                    sep_position_zero_based=(
+                        None if sep_resid is None else sep_resid - 1
+                    ),
                 )
             )
     return tasks
@@ -535,7 +593,9 @@ def pae_group_labels(sample_result: Any, task: FoldTask, pae_length: int) -> Any
 
     import numpy as np
 
-    complex_chain_id = getattr(getattr(sample_result, "complex", None), "chain_id", None)
+    complex_chain_id = getattr(
+        getattr(sample_result, "complex", None), "chain_id", None
+    )
     if complex_chain_id is not None and len(complex_chain_id) == pae_length:
         labels = np.asarray(complex_chain_id)
         if np.unique(labels).size > 1:
@@ -547,11 +607,19 @@ def pae_group_labels(sample_result: Any, task: FoldTask, pae_length: int) -> Any
             labels = metric_to_numpy(entity_id).astype(int)
         except (TypeError, ValueError):
             labels = None
-        if labels is not None and labels.size == pae_length and np.unique(labels).size > 1:
+        if (
+            labels is not None
+            and labels.size == pae_length
+            and np.unique(labels).size > 1
+        ):
             return labels
 
     labels = np.asarray(
-        [chain_id for chain_id, sequence in task.chains.items() for _ in range(len(sequence))]
+        [
+            chain_id
+            for chain_id, sequence in task.chains.items()
+            for _ in range(len(sequence))
+        ]
     )
     if labels.size == pae_length and np.unique(labels).size > 1:
         return labels
@@ -564,7 +632,9 @@ def ensure_local_snapshot(repo_id: str) -> Path:
     cache_dir = os.environ.get("HF_HUB_CACHE")
     if not cache_dir:
         raise RuntimeError("HF_HUB_CACHE must be set by scripts/esm_exec.sh")
-    snapshot = snapshot_download(repo_id=repo_id, cache_dir=cache_dir, local_files_only=True)
+    snapshot = snapshot_download(
+        repo_id=repo_id, cache_dir=cache_dir, local_files_only=True
+    )
     print(f"local_snapshot[{repo_id}]={snapshot}")
     return Path(snapshot)
 
@@ -604,6 +674,54 @@ def fold_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
     return {key: value for key, value in values.items() if value is not None}
 
 
+def stable_task_seed(base_seed: int, task_id: str) -> int:
+    """Derive an order-independent, non-negative 31-bit seed for one task."""
+
+    digest = hashlib.sha256(f"{base_seed}:{task_id}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") % (2**31)
+
+
+def task_is_complete(out_dir: Path, task_id: str) -> bool:
+    """Return whether a task JSON exists and all CIFs it records are present."""
+
+    task_json = out_dir / f"{task_id}.json"
+    if not task_json.is_file():
+        return False
+    try:
+        payload = read_json(task_json)
+        cif_paths = [Path(path) for path in payload.get("cifs", [])]
+    except (OSError, ValueError, TypeError):
+        return False
+    return bool(cif_paths) and all(
+        path.is_file() and path.stat().st_size > 0 for path in cif_paths
+    )
+
+
+def load_design_keys(path: Path | None) -> set[str] | None:
+    if path is None:
+        return None
+    payload = read_json(path)
+    values = payload.get("design_keys", []) if isinstance(payload, dict) else payload
+    if not isinstance(values, list) or not all(
+        isinstance(value, str) for value in values
+    ):
+        raise ValueError(f"{path} must contain a JSON list of design keys.")
+    return set(values)
+
+
+def parse_states(value: str | None) -> set[str] | None:
+    if value is None:
+        return None
+    allowed = {"AB_SEP", "DC_SER", "AC_SEP", "DB_SER", "A_SEP", "D_SER", "B", "C"}
+    states = {item.strip() for item in value.split(",") if item.strip()}
+    unknown = states - allowed
+    if unknown:
+        raise ValueError("Unknown ESMFold2 state(s): " + ", ".join(sorted(unknown)))
+    if not states:
+        raise ValueError("--states must select at least one state.")
+    return states
+
+
 def run_fold(
     task: FoldTask,
     model: Any,
@@ -623,7 +741,9 @@ def run_fold(
     for chain_id, sequence in task.chains.items():
         modifications = None
         if task.sep_chain == chain_id:
-            modifications = [Modification(position=task.sep_position_zero_based, ccd="SEP")]
+            modifications = [
+                Modification(position=task.sep_position_zero_based, ccd="SEP")
+            ]
         sequence_inputs.append(
             ProteinInput(id=chain_id, sequence=sequence, modifications=modifications)
         )
@@ -669,10 +789,16 @@ def main() -> None:
 
     manifest = load_manifest(mpnn_output_dir)
     records = load_mpnn_records(mpnn_output_dir, manifest)
+    selected_design_keys = load_design_keys(args.design_keys_json)
+    if selected_design_keys is not None:
+        records = [
+            record for record in records if record.design_key in selected_design_keys
+        ]
     passing = load_prefilter_pass_set(args.prefilter_summary)
     if args.prefilter_summary and not args.force_through_prefilter:
         records = [record for record in records if record.design_key in passing]
-    tasks = build_fold_tasks(records, manifest, args.sep_source_residue)
+    states = parse_states(args.states)
+    tasks = build_fold_tasks(records, manifest, args.sep_source_residue, states=states)
 
     planned_payload = {
         "mpnn_output_dir": str(mpnn_output_dir),
@@ -681,20 +807,31 @@ def main() -> None:
         "model_repo": MODEL_REPOS[args.model],
         "sep_source_residue": args.sep_source_residue,
         "force_through_prefilter": args.force_through_prefilter,
-        "prefilter_summary": str(args.prefilter_summary) if args.prefilter_summary else "",
+        "prefilter_summary": (
+            str(args.prefilter_summary) if args.prefilter_summary else ""
+        ),
         "num_mpnn_records_selected": len(records),
         "num_fold_tasks": len(tasks),
+        "states": sorted(states) if states is not None else "all",
+        "design_keys_json": str(args.design_keys_json) if args.design_keys_json else "",
+        "resume": args.resume,
+        "derive_task_seeds": args.derive_task_seeds,
         "fold_kwargs": fold_kwargs_from_args(args),
         "tasks": [task_to_manifest(task) for task in tasks],
     }
     write_json(out_dir / "planned_folds.json", planned_payload)
     print(
         "planned_folds="
-        + json.dumps({"records": len(records), "fold_tasks": len(tasks)}, sort_keys=True)
+        + json.dumps(
+            {"records": len(records), "fold_tasks": len(tasks)}, sort_keys=True
+        )
     )
 
     if args.dry_run or not tasks:
-        write_json(out_dir / "esmfold2_run_manifest.json", planned_payload | {"dry_run": args.dry_run})
+        write_json(
+            out_dir / "esmfold2_run_manifest.json",
+            planned_payload | {"dry_run": args.dry_run},
+        )
         return
 
     repo_id, model = load_esmfold2_model(args.model)
@@ -702,8 +839,17 @@ def main() -> None:
     completed: list[dict[str, Any]] = []
     failures: list[dict[str, Any]] = []
     for task in tasks:
+        if args.resume and task_is_complete(out_dir, task.task_id):
+            completed.append(read_json(out_dir / f"{task.task_id}.json"))
+            print(json.dumps({"task_id": task.task_id, "status": "already_complete"}))
+            continue
         try:
-            completed.append(run_fold(task, model, args.model, repo_id, out_dir, fold_kwargs))
+            task_kwargs = dict(fold_kwargs)
+            if args.derive_task_seeds and args.seed is not None:
+                task_kwargs["seed"] = stable_task_seed(args.seed, task.task_id)
+            completed.append(
+                run_fold(task, model, args.model, repo_id, out_dir, task_kwargs)
+            )
         except Exception as exc:
             failures.append(task_to_manifest(task) | {"error": str(exc)})
             write_json(
