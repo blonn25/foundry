@@ -89,6 +89,15 @@ def test_prefilters_apply_all_sep_coordination_thresholds() -> None:
         "AB.sep_phosphate_contacting_partner_residue_count",
     } <= set(passed["checks"])
 
+    # Campaigns opt in by defining SEP minima. Without them, no SEP metrics are
+    # required and the original prefilter behavior remains available.
+    pair_metrics["AB"].pop("sep_phosphate")
+    for _, limit_key in metrics.SEP_COORDINATION_LIMITS:
+        config["filters"]["prefilter"].pop(limit_key)
+    disabled = metrics.apply_prefilters(pair_metrics, config)
+    assert disabled["pass"]
+    assert not any("sep_phosphate" in key for key in disabled["checks"])
+
 
 def test_sep_contact_metric_schema_includes_coverage_counts() -> None:
     expected = {
