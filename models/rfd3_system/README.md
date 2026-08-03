@@ -48,9 +48,10 @@ docs/proxy_designability_grid_001.md     Proxy parameter designability experimen
 docs/examples/superdiff_shared_chain_proxy.yaml
                                           Minimal example override shape
 scripts/plot_coupling_diagnostics.py     Post-run Matplotlib diagnostics plotter
-scripts/build_tied_mpnn_input.py         Build separated A+B / D+C tied-MPNN inputs
+scripts/build_tied_mpnn_input.py         Build tied ProteinMPNN or Caliby inputs
+scripts/sequence_design_io.py            Normalize backend outputs by chain ID
 scripts/fold_tied_mpnn_designability.py  Fold only tied A+B and D+C complexes
-scripts/fold_mpnn_esmfold2.py             Fold selected tied-MPNN states with local ESMFold2
+scripts/fold_mpnn_esmfold2.py             Fold selected backend states with local ESMFold2
 scripts/adaptive_campaign_metrics.py      Thread, relax, filter, and package adaptive rounds
 archived/                                Upstream RFD3 docs/assets kept for reference only
 ```
@@ -169,15 +170,17 @@ contains cosine diagnostics, even when `merged_output_policy=none`. Use
 Cosine plots show at most the first three batch samples by default; use
 `--max-cosine-samples N` to change this.
 
-For staged campaigns, `fold_mpnn_esmfold2.py` accepts `--states` and
+For staged campaigns, `fold_mpnn_esmfold2.py` accepts an explicit
+`--sequence-design-backend`, plus `--states` and
 `--design-keys-json` so on-target dimers, monomers, and off-target dimers can
 be folded only after the preceding filter passes. `--resume` skips complete
 task outputs, and `--derive-task-seeds` derives stable per-task seeds from the
 specified base seed. Omitting these options preserves the historical behavior
 of folding all eight states.
 
-`adaptive_campaign_metrics.py` supports the top-level
-`pipeline/adaptive_campaign_001` workflow. It threads ProteinMPNN sequences
+`adaptive_campaign_metrics.py` supports the top-level adaptive workflows. It
+loads the explicitly configured ProteinMPNN or Caliby backend, reads Caliby
+sequences from emitted structure chain IDs, and threads designed sequences
 onto the original track-specific RFD structures, preserves fixed SEP/SER motif
 chemistry, runs configurable BindCraft-style FastRelax, computes interface,
 monomer, phosphate-contact, and directional RMSD filters, and writes one JSON

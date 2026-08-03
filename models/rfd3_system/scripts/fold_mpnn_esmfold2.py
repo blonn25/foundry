@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Fold tied ProteinMPNN outputs from rfd3_system with local ESMFold2.
+"""Fold tied ProteinMPNN or Caliby outputs from rfd3_system with ESMFold2.
 
 The tied MPNN input contains two separated complexes in one four-chain file:
 ``A+B`` and ``D+C``.  MPNN writes one FASTA record and, optionally, one CIF
@@ -23,6 +23,11 @@ import re
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
+
+from sequence_design_io import (
+    load_sequence_design_manifest,
+    load_sequence_design_records,
+)
 
 
 MODEL_REPOS = {
@@ -104,7 +109,16 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument(
         "mpnn_output_dir",
         type=Path,
-        help="ProteinMPNN output directory containing tied_mpnn_manifest.json and FASTA files.",
+        help="Selected sequence-design backend output directory.",
+    )
+    parser.add_argument(
+        "--sequence-design-backend",
+        choices=["proteinmpnn", "caliby"],
+        default="proteinmpnn",
+        help=(
+            "Sequence-design output format. ProteinMPNN remains the CLI default "
+            "for compatibility; adaptive campaign configs select this explicitly."
+        ),
     )
     parser.add_argument(
         "--out-dir", type=Path, required=True, help="ESMFold2 output directory."
@@ -149,7 +163,7 @@ def parse_args() -> argparse.Namespace:
         "--design-keys-json",
         type=Path,
         help=(
-            "Optional JSON list, or mapping with a design_keys list, selecting ProteinMPNN "
+            "Optional JSON list, or mapping with a design_keys list, selecting sequence "
             "design keys to fold."
         ),
     )
@@ -529,6 +543,10 @@ def task_to_manifest(task: FoldTask) -> dict[str, Any]:
         "task_id": task.task_id,
         "complex_kind": task.complex_kind,
         "design_key": task.record.design_key,
+        "sequence_design_backend": getattr(task.record, "backend", "proteinmpnn"),
+        "sequence_design_input": task.record.mpnn_name,
+        "sequence_design_structure": task.record.mpnn_cif,
+        "sequence_design_score": getattr(task.record, "backend_score", None),
         "mpnn_name": task.record.mpnn_name,
         "model_index": task.record.model_index,
         "batch_index": task.record.batch_index,
@@ -787,8 +805,12 @@ def main() -> None:
     out_dir = args.out_dir.resolve()
     out_dir.mkdir(parents=True, exist_ok=True)
 
-    manifest = load_manifest(mpnn_output_dir)
-    records = load_mpnn_records(mpnn_output_dir, manifest)
+    manifest = load_sequence_design_manifest(
+        mpnn_output_dir, args.sequence_design_backend
+    )
+    records = load_sequence_design_records(
+        mpnn_output_dir, manifest, args.sequence_design_backend
+    )
     selected_design_keys = load_design_keys(args.design_keys_json)
     if selected_design_keys is not None:
         records = [
@@ -801,6 +823,8 @@ def main() -> None:
     tasks = build_fold_tasks(records, manifest, args.sep_source_residue, states=states)
 
     planned_payload = {
+        "sequence_design_backend": args.sequence_design_backend,
+        "sequence_design_output_dir": str(mpnn_output_dir),
         "mpnn_output_dir": str(mpnn_output_dir),
         "out_dir": str(out_dir),
         "model_key": args.model,
@@ -810,6 +834,7 @@ def main() -> None:
         "prefilter_summary": (
             str(args.prefilter_summary) if args.prefilter_summary else ""
         ),
+        "num_sequence_design_records_selected": len(records),
         "num_mpnn_records_selected": len(records),
         "num_fold_tasks": len(tasks),
         "states": sorted(states) if states is not None else "all",

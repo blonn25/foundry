@@ -178,6 +178,12 @@ scripts/caliby_exec.sh \
 monomers and interfaces.  Do not override `input_cfg.pdb_name_list`; Caliby will
 use all generated PDBs in `combined_inputs/`.
 
+Adaptive campaigns use `sequence_design_io.py` to recover Caliby sequences
+from explicit chain IDs in each emitted structure, rather than assuming an
+ordering for the colon-separated CSV sequence. They then thread those
+sequences onto the original track-specific RFD structures. Mapped fixed
+positions are skipped during threading, preserving track-1 SEP and track-2 SER.
+
 ## ESMFold2 Command
 
 After Caliby writes `seq_des_outputs.csv`, fold the designed sequences with the

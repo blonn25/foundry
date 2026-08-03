@@ -27,10 +27,14 @@ from adapted_bindcraft_functions.pyrosetta_utils import (
     score_interface,
     score_monomer_surface_hydrophobicity,
 )
-from fold_mpnn_esmfold2 import load_manifest, load_mpnn_records
+from fold_mpnn_esmfold2 import validate_shared_sequences
 from pyrosetta_interface_metrics import (
     SEP_PHOSPHATE_POLAR_CONTACT_CUTOFF,
     sep_phosphate_polar_contact_metrics,
+)
+from sequence_design_io import (
+    load_sequence_design_manifest,
+    load_sequence_design_records,
 )
 
 
@@ -79,7 +83,7 @@ def parse_args() -> argparse.Namespace:
     subparsers = parser.add_subparsers(dest="command", required=True)
 
     prefilter = subparsers.add_parser("prefilter")
-    prefilter.add_argument("mpnn_output_dir", type=Path)
+    prefilter.add_argument("sequence_design_output_dir", type=Path)
     prefilter.add_argument("--round-dir", type=Path, required=True)
     prefilter.add_argument("--config", type=Path, required=True)
 
@@ -106,7 +110,14 @@ def parse_args() -> argparse.Namespace:
     cleanup = subparsers.add_parser("cleanup-round")
     cleanup.add_argument("--round-dir", type=Path, required=True)
     cleanup.add_argument("--rfd3-dir", type=Path, required=True)
-    cleanup.add_argument("--mpnn-dir", type=Path, required=True)
+    cleanup.add_argument(
+        "--sequence-design-dir",
+        "--mpnn-dir",
+        dest="sequence_design_dir",
+        type=Path,
+        required=True,
+        help="Selected backend output directory; --mpnn-dir is a compatibility alias.",
+    )
     cleanup.add_argument("--fold-dir", type=Path, action="append", default=[])
     cleanup.add_argument(
         "--config",
@@ -190,6 +201,46 @@ def mapped_fixed_labels(entry: Any, chains: set[str]) -> set[str]:
         for label in entry.fixed_residues
         if (match := LABEL_RE.fullmatch(label)) and match.group("chain") in chains
     }
+
+
+def normalize_omitted_amino_acids(value: Any) -> set[str]:
+    """Return configured one-letter omissions for validation."""
+
+    if value in (None, ""):
+        return set()
+    three_to_one = {three: one for one, three in AA1_TO_3.items()}
+    values = value if isinstance(value, list) else str(value).split(",")
+    omitted: set[str] = set()
+    for item in values:
+        token = str(item).strip().upper()
+        if len(token) == 1 and token in AA1_TO_3:
+            omitted.add(token)
+        elif token in three_to_one:
+            omitted.add(three_to_one[token])
+        else:
+            raise ValueError(f"Unsupported omitted amino acid token: {item!r}")
+    return omitted
+
+
+def validate_omitted_amino_acids(
+    record: Any, entry: Any, omitted: set[str]
+) -> None:
+    """Ensure omissions were honored outside explicitly fixed positions."""
+
+    if not omitted:
+        return
+    fixed = set(entry.fixed_residues)
+    violations = [
+        f"{chain}{position}"
+        for chain, sequence in record.chains.items()
+        for position, residue in enumerate(sequence, start=1)
+        if residue in omitted and f"{chain}{position}" not in fixed
+    ]
+    if violations:
+        raise ValueError(
+            f"{record.design_key} contains omitted amino acids at designable "
+            f"positions: {', '.join(violations)}"
+        )
 
 
 def pose_chain_residues(pose: Any, chain_id: str) -> list[int]:
@@ -752,14 +803,19 @@ def prefilter_record(
 def prefilter(args: argparse.Namespace) -> None:
     config = load_config(args.config)
     round_dir = args.round_dir.resolve()
-    mpnn_dir = args.mpnn_output_dir.resolve()
-    manifest = load_manifest(mpnn_dir)
-    records = load_mpnn_records(mpnn_dir, manifest)
+    sequence_design_dir = args.sequence_design_output_dir.resolve()
+    backend = str(config["sequence_design"]["backend"])
+    manifest = load_sequence_design_manifest(sequence_design_dir, backend)
+    records = load_sequence_design_records(sequence_design_dir, manifest, backend)
+    backend_config = config[backend]
+    omitted = normalize_omitted_amino_acids(backend_config.get("omit"))
     sequence_dir = round_dir / "sequences"
     passing: list[str] = []
 
     for record in records:
         entry = manifest[record.mpnn_name]
+        validate_shared_sequences(record, entry)
+        validate_omitted_amino_acids(record, entry, omitted)
         passed, result = prefilter_record(record, entry, round_dir, config)
         fasta = sequence_dir / f"{safe_name(record.design_key)}.fasta"
         fasta.parent.mkdir(parents=True, exist_ok=True)
@@ -772,6 +828,10 @@ def prefilter(args: argparse.Namespace) -> None:
             round_dir,
             record.design_key,
             {
+                "sequence_design_backend": backend,
+                "sequence_design_input": record.mpnn_name,
+                "sequence_design_structure": record.mpnn_cif,
+                "sequence_design_score": getattr(record, "backend_score", None),
                 "model_index": record.model_index,
                 "batch_index": record.batch_index,
                 "design_index": record.design_index,
@@ -1064,6 +1124,11 @@ def build_promotion_manifest(args: argparse.Namespace) -> None:
             "rfd3/track1.cif.gz": Path(metrics["rfd3_track1_cif"]),
             "rfd3/track2.cif.gz": Path(metrics["rfd3_track2_cif"]),
         }
+        sequence_design_structure = metrics.get("sequence_design_structure")
+        if sequence_design_structure:
+            candidates[
+                "sequence_design/" + Path(sequence_design_structure).name
+            ] = Path(sequence_design_structure)
         for stage, stage_payload in metrics.get("stages", {}).items():
             for pair_payload in stage_payload.get("metrics", {}).values():
                 if not isinstance(pair_payload, dict):
@@ -1111,7 +1176,7 @@ def cleanup_round(args: argparse.Namespace) -> None:
 
     roots = [
         rfd3_dir,
-        args.mpnn_dir.resolve(),
+        args.sequence_design_dir.resolve(),
         *(path.resolve() for path in args.fold_dir),
         round_dir / "artifacts",
         round_dir / "work",

@@ -1,6 +1,8 @@
 from __future__ import annotations
 
 import sys
+import csv
+import json
 from pathlib import Path
 
 import numpy as np
@@ -14,6 +16,7 @@ import adaptive_campaign_metrics as metrics  # noqa: E402
 import build_tied_mpnn_input as tied_input  # noqa: E402
 import fold_mpnn_esmfold2 as folding  # noqa: E402
 import pyrosetta_interface_metrics as interface_metrics  # noqa: E402
+import sequence_design_io as sequence_io  # noqa: E402
 
 
 def test_filter_threshold_operators_have_requested_boundary_semantics() -> None:
@@ -240,3 +243,73 @@ def test_fold_state_parser_and_task_seed_are_stable() -> None:
     assert folding.stable_task_seed(123, "design_AB_SEP") != folding.stable_task_seed(
         123, "design_DC_SER"
     )
+
+
+def test_caliby_records_use_structure_chain_ids_not_csv_order(tmp_path: Path) -> None:
+    structure = tmp_path / "input_sample0.pdb"
+    structure.write_text(
+        "ATOM      1  CA  ALA A   1       0.000   0.000   0.000  1.00  0.00           C  \n"
+        "TER\n"
+        "ATOM      2  CA  GLY B   1       1.000   0.000   0.000  1.00  0.00           C  \n"
+        "TER\n"
+        "ATOM      3  CA  SER D   1     100.000   0.000   0.000  1.00  0.00           C  \n"
+        "TER\n"
+        "ATOM      4  CA  TYR C   1     101.000   0.000   0.000  1.00  0.00           C  \n"
+        "TER\nEND\n"
+    )
+    manifest = {
+        "entries": [
+            {
+                "model_index": 0,
+                "track1_cif": "track1.cif.gz",
+                "track2_cif": "track2.cif.gz",
+                "combined_pdb": str(tmp_path / "input.pdb"),
+                "chain_order": ["A", "B", "D", "C"],
+                "chain_lengths": {"A": 1, "B": 1, "D": 1, "C": 1},
+                "fixed_a_source_residues": ["A10"],
+                "fixed_residues": ["A1", "D1"],
+            }
+        ]
+    }
+    (tmp_path / "tied_caliby_manifest.json").write_text(json.dumps(manifest))
+    with (tmp_path / "seq_des_outputs.csv").open("w", newline="") as handle:
+        writer = csv.DictWriter(
+            handle, fieldnames=["example_id", "out_pdb", "U", "input_seq", "seq"]
+        )
+        writer.writeheader()
+        writer.writerow(
+            {
+                "example_id": "input",
+                "out_pdb": str(structure),
+                "U": "-12.5",
+                "input_seq": "X:X:X:X",
+                # Deliberately wrong: the loader must trust structure chain IDs.
+                "seq": "W:W:W:W",
+            }
+        )
+
+    entries = sequence_io.load_sequence_design_manifest(tmp_path, "caliby")
+    records = sequence_io.load_sequence_design_records(tmp_path, entries, "caliby")
+    assert len(records) == 1
+    assert records[0].chains == {"A": "A", "B": "G", "D": "S", "C": "Y"}
+    assert records[0].backend_score == -12.5
+    assert records[0].design_key == "input_sample0"
+
+
+def test_omitted_amino_acids_allow_fixed_positions_only() -> None:
+    assert metrics.normalize_omitted_amino_acids("CYS") == {"C"}
+    entry = type("Entry", (), {"fixed_residues": ["A1"]})()
+    allowed = type(
+        "Record", (), {"design_key": "allowed", "chains": {"A": "CA"}}
+    )()
+    metrics.validate_omitted_amino_acids(allowed, entry, {"C"})
+
+    rejected = type(
+        "Record", (), {"design_key": "rejected", "chains": {"A": "AC"}}
+    )()
+    try:
+        metrics.validate_omitted_amino_acids(rejected, entry, {"C"})
+    except ValueError as error:
+        assert "A2" in str(error)
+    else:
+        raise AssertionError("Expected a designable omitted residue to fail")
