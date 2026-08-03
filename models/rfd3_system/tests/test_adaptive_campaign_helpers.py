@@ -27,6 +27,69 @@ def test_filter_threshold_operators_have_requested_boundary_semantics() -> None:
     assert not metrics.criterion(None, "gt", 0.5)["pass"]
 
 
+def test_prefilters_apply_all_sep_coordination_thresholds() -> None:
+    def pair(shared: str, partner: str) -> dict:
+        return {
+            "interface": {
+                "shape_complementarity": 0.7,
+                "interface_hbonds": 4,
+                "interface_unsat_hbonds": 2,
+            },
+            "monomers": {
+                shared: {
+                    "surface_hydrophobicity": 0.2,
+                    "radius_of_gyration": 10.0,
+                    "radius_of_gyration_limit": 20.0,
+                },
+                partner: {
+                    "surface_hydrophobicity": 0.2,
+                    "radius_of_gyration": 10.0,
+                    "radius_of_gyration_limit": 20.0,
+                },
+            },
+        }
+
+    pair_metrics = {"AB": pair("A", "B"), "DC": pair("D", "C")}
+    pair_metrics["AB"]["sep_phosphate"] = {
+        "sep_phosphate_bidentate_count": 1,
+        "sep_phosphate_polar_contact_count": 5,
+        "sep_phosphate_contacted_oxygen_count": 3,
+        "sep_phosphate_contacting_partner_residue_count": 2,
+    }
+    config = {
+        "filters": {
+            "prefilter": {
+                "shape_complementarity_min": 0.5,
+                "interface_hbonds_min": 2,
+                "interface_unsat_hbonds_max": 6,
+                "surface_hydrophobicity_max": 0.37,
+                "sep_phosphate_bidentate_min": 1,
+                "sep_phosphate_contacts_min": 5,
+                "sep_phosphate_contacted_oxygens_min": 3,
+                "sep_phosphate_contacting_partner_residues_min": 3,
+            }
+        }
+    }
+
+    failed = metrics.apply_prefilters(pair_metrics, config)
+    assert not failed["pass"]
+    assert not failed["checks"][
+        "AB.sep_phosphate_contacting_partner_residue_count"
+    ]["pass"]
+
+    pair_metrics["AB"]["sep_phosphate"][
+        "sep_phosphate_contacting_partner_residue_count"
+    ] = 3
+    passed = metrics.apply_prefilters(pair_metrics, config)
+    assert passed["pass"]
+    assert {
+        "AB.sep_phosphate_bidentate_count",
+        "AB.sep_phosphate_polar_contact_count",
+        "AB.sep_phosphate_contacted_oxygen_count",
+        "AB.sep_phosphate_contacting_partner_residue_count",
+    } <= set(passed["checks"])
+
+
 def test_sep_contact_metric_schema_includes_coverage_counts() -> None:
     expected = {
         "sep_phosphate_polar_contact_count",

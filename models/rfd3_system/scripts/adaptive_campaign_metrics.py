@@ -76,6 +76,18 @@ LABEL_RE = re.compile(r"^(?P<chain>[A-Za-z]+)(?P<resid>-?\d+)[A-Za-z]*$")
 RFD_TRACK_RE = re.compile(
     r"(?P<prefix>.+)_track(?P<track>[12])_model_(?P<model>\d+)$"
 )
+SEP_COORDINATION_LIMITS = (
+    ("sep_phosphate_bidentate_count", "sep_phosphate_bidentate_min"),
+    ("sep_phosphate_polar_contact_count", "sep_phosphate_contacts_min"),
+    (
+        "sep_phosphate_contacted_oxygen_count",
+        "sep_phosphate_contacted_oxygens_min",
+    ),
+    (
+        "sep_phosphate_contacting_partner_residue_count",
+        "sep_phosphate_contacting_partner_residues_min",
+    ),
+)
 
 
 def parse_args() -> argparse.Namespace:
@@ -667,8 +679,48 @@ def rfd_geometry_prefilter(args: argparse.Namespace) -> None:
     )
 
 
+def sep_coordination_metrics(
+    structure: Path,
+    limits: dict[str, Any],
+) -> dict[str, Any]:
+    """Measure SEP phosphate contacts to partner chain B in an A+B structure."""
+    from adapted_bindcraft_functions.pyrosetta_utils import init_pyrosetta_once
+
+    pose = init_pyrosetta_once().pose_from_file(str(structure))
+    return sep_phosphate_polar_contact_metrics(
+        pose,
+        "A",
+        "B",
+        cutoff=float(
+            limits.get(
+                "sep_phosphate_contact_cutoff_angstrom",
+                SEP_PHOSPHATE_POLAR_CONTACT_CUTOFF,
+            )
+        ),
+    )
+
+
+def add_sep_coordination_checks(
+    checks: dict[str, Any],
+    sep_metrics: dict[str, Any],
+    limits: dict[str, Any],
+    prefix: str,
+) -> None:
+    """Add configured inclusive SEP coordination thresholds to a decision."""
+    for metric_key, limit_key in SEP_COORDINATION_LIMITS:
+        if limit_key in limits:
+            checks[f"{prefix}.{metric_key}"] = criterion(
+                sep_metrics.get(metric_key),
+                "ge",
+                float(limits[limit_key]),
+            )
+
+
 def apply_prefilters(
-    pair_metrics: dict[str, Any], config: dict[str, Any]
+    pair_metrics: dict[str, Any],
+    config: dict[str, Any],
+    *,
+    include_sep_coordination: bool = True,
 ) -> dict[str, Any]:
     limits = config["filters"]["prefilter"]
     checks: dict[str, Any] = {}
@@ -699,6 +751,16 @@ def apply_prefilters(
             "lt",
             float(metrics["radius_of_gyration_limit"]),
         )
+    if include_sep_coordination and any(
+        limit_key in limits for _, limit_key in SEP_COORDINATION_LIMITS
+    ):
+        sep_metrics = pair_metrics["AB"].get("sep_phosphate")
+        if sep_metrics is None:
+            raise ValueError(
+                "SEP coordination prefilters are configured, but AB SEP metrics "
+                "were not computed"
+            )
+        add_sep_coordination_checks(checks, sep_metrics, limits, "AB")
     return {"pass": all(item["pass"] for item in checks.values()), "checks": checks}
 
 
@@ -782,6 +844,15 @@ def prefilter_record(
                 },
             },
         }
+        prefilter_limits = config["filters"]["prefilter"]
+        if any(
+            limit_key in prefilter_limits
+            for _, limit_key in SEP_COORDINATION_LIMITS
+        ):
+            pair_metrics["AB"]["sep_phosphate"] = sep_coordination_metrics(
+                ab_relaxed,
+                prefilter_limits,
+            )
         decision = apply_prefilters(pair_metrics, config)
         passed = bool(decision["pass"])
         result = {"metrics": pair_metrics, "decision": decision}
@@ -888,20 +959,7 @@ def score_on_target(
         )
         pair["rmsd_to_threaded"] = dimer_rmsds(relaxed, reference, shared, partner)
         if kind == "AB_SEP":
-            from adapted_bindcraft_functions.pyrosetta_utils import init_pyrosetta_once
-
-            pose = init_pyrosetta_once().pose_from_file(str(relaxed))
-            pair["sep_phosphate"] = sep_phosphate_polar_contact_metrics(
-                pose,
-                "A",
-                "B",
-                cutoff=float(
-                    limits.get(
-                        "sep_phosphate_contact_cutoff_angstrom",
-                        SEP_PHOSPHATE_POLAR_CONTACT_CUTOFF,
-                    )
-                ),
-            )
+            pair["sep_phosphate"] = sep_coordination_metrics(relaxed, limits)
         results[kind] = pair
 
         checks[f"{kind}.mean_plddt"] = criterion(
@@ -930,36 +988,19 @@ def score_on_target(
         )
 
     repeated = apply_prefilters(
-        {"AB": results["AB_SEP"], "DC": results["DC_SER"]}, config
+        {"AB": results["AB_SEP"], "DC": results["DC_SER"]},
+        config,
+        include_sep_coordination=False,
     )
     checks |= {
         f"folded_prefilter.{key}": value for key, value in repeated["checks"].items()
     }
-    sep = results["AB_SEP"]["sep_phosphate"]
-    checks["AB_SEP.sep_phosphate_bidentate_count"] = criterion(
-        sep["sep_phosphate_bidentate_count"],
-        "ge",
-        float(limits["sep_phosphate_bidentate_min"]),
+    add_sep_coordination_checks(
+        checks,
+        results["AB_SEP"]["sep_phosphate"],
+        limits,
+        "AB_SEP",
     )
-    checks["AB_SEP.sep_phosphate_polar_contact_count"] = criterion(
-        sep["sep_phosphate_polar_contact_count"],
-        "ge",
-        float(limits["sep_phosphate_contacts_min"]),
-    )
-    if "sep_phosphate_contacted_oxygens_min" in limits:
-        checks["AB_SEP.sep_phosphate_contacted_oxygen_count"] = criterion(
-            sep["sep_phosphate_contacted_oxygen_count"],
-            "ge",
-            float(limits["sep_phosphate_contacted_oxygens_min"]),
-        )
-    if "sep_phosphate_contacting_partner_residues_min" in limits:
-        checks[
-            "AB_SEP.sep_phosphate_contacting_partner_residue_count"
-        ] = criterion(
-            sep["sep_phosphate_contacting_partner_residue_count"],
-            "ge",
-            float(limits["sep_phosphate_contacting_partner_residues_min"]),
-        )
     decision = {"pass": all(item["pass"] for item in checks.values()), "checks": checks}
     return decision["pass"], {"metrics": results, "decision": decision}
 
