@@ -338,7 +338,10 @@ def thread_track_structure(
             if residue.name3().strip() == AA1_TO_3[aa]:
                 continue
             mover = MutateResidue(pose_index, AA1_TO_3[aa])
-            mover.set_preserve_atom_coords(True)
+            # Retain the designed backbone but rebuild the new residue's
+            # sidechain before FastRelax repacks it. Reusing matching atom
+            # coordinates can transfer geometry from the RFD3 residue type.
+            mover.set_preserve_atom_coords(False)
             mover.apply(pose)
 
     # Relabel only after mutation so source-chain lookup remains unambiguous.
