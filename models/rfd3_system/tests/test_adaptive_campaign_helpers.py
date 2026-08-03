@@ -13,6 +13,7 @@ sys.path.insert(0, str(SCRIPTS))
 import adaptive_campaign_metrics as metrics  # noqa: E402
 import build_tied_mpnn_input as tied_input  # noqa: E402
 import fold_mpnn_esmfold2 as folding  # noqa: E402
+import pyrosetta_interface_metrics as interface_metrics  # noqa: E402
 
 
 def test_filter_threshold_operators_have_requested_boundary_semantics() -> None:
@@ -21,6 +22,130 @@ def test_filter_threshold_operators_have_requested_boundary_semantics() -> None:
     assert metrics.criterion(2, "ge", 2)["pass"]
     assert metrics.criterion(5, "ge", 5)["pass"]
     assert not metrics.criterion(None, "gt", 0.5)["pass"]
+
+
+def test_sep_contact_metric_schema_includes_coverage_counts() -> None:
+    expected = {
+        "sep_phosphate_polar_contact_count",
+        "sep_phosphate_bidentate_count",
+        "sep_phosphate_contacted_oxygen_count",
+        "sep_phosphate_contacting_partner_residue_count",
+    }
+    assert expected <= set(interface_metrics.METRIC_KEYS)
+    assert expected <= set(
+        interface_metrics.sep_phosphate_polar_contact_metrics(
+            _EmptyPose(), "A", "B"
+        )
+    )
+
+
+class _EmptyPose:
+    """Small no-SEP pose used to test the importable metric schema."""
+
+    @staticmethod
+    def total_residue() -> int:
+        return 0
+
+
+class _Point:
+    def __init__(self, xyz: tuple[float, float, float]) -> None:
+        self.xyz = np.asarray(xyz, dtype=float)
+
+    def distance(self, other: "_Point") -> float:
+        return float(np.linalg.norm(self.xyz - other.xyz))
+
+
+class _AtomType:
+    def __init__(self, element: str) -> None:
+        self._element = element
+
+    def element(self) -> str:
+        return self._element
+
+
+class _Residue:
+    def __init__(
+        self,
+        name: str,
+        atoms: list[tuple[str, str, tuple[float, float, float]]],
+    ) -> None:
+        self._name = name
+        self._atoms = atoms
+
+    def name3(self) -> str:
+        return self._name
+
+    def natoms(self) -> int:
+        return len(self._atoms)
+
+    def nheavyatoms(self) -> int:
+        return len(self._atoms)
+
+    def atom_name(self, atom_index: int) -> str:
+        return self._atoms[atom_index - 1][0]
+
+    def atom_type(self, atom_index: int) -> _AtomType:
+        return _AtomType(self._atoms[atom_index - 1][1])
+
+    def xyz(self, atom_index: int) -> _Point:
+        return _Point(self._atoms[atom_index - 1][2])
+
+
+class _PdbInfo:
+    def __init__(self, chains: list[str]) -> None:
+        self._chains = chains
+
+    def chain(self, residue_index: int) -> str:
+        return self._chains[residue_index - 1]
+
+
+class _Pose:
+    def __init__(self, residues: list[_Residue], chains: list[str]) -> None:
+        self._residues = residues
+        self._pdb_info = _PdbInfo(chains)
+
+    def total_residue(self) -> int:
+        return len(self._residues)
+
+    def residue(self, residue_index: int) -> _Residue:
+        return self._residues[residue_index - 1]
+
+    def pdb_info(self) -> _PdbInfo:
+        return self._pdb_info
+
+
+def test_sep_contact_metrics_count_oxygen_and_residue_coverage() -> None:
+    pose = _Pose(
+        [
+            _Residue(
+                "SEP",
+                [
+                    ("O1P", "O", (0.0, 0.0, 0.0)),
+                    ("O2P", "O", (10.0, 0.0, 0.0)),
+                    ("O3P", "O", (20.0, 0.0, 0.0)),
+                ],
+            ),
+            _Residue(
+                "ARG",
+                [
+                    ("NH1", "N", (1.0, 0.0, 0.0)),
+                    ("NH2", "N", (11.0, 0.0, 0.0)),
+                ],
+            ),
+            _Residue("LYS", [("NZ", "N", (21.0, 0.0, 0.0))]),
+            _Residue("GLY", [("O", "O", (2.0, 0.0, 0.0))]),
+        ],
+        ["A", "B", "B", "B"],
+    )
+    observed = interface_metrics.sep_phosphate_polar_contact_metrics(
+        pose, "A", "B", cutoff=3.6
+    )
+    assert observed == {
+        "sep_phosphate_polar_contact_count": 4,
+        "sep_phosphate_bidentate_count": 1,
+        "sep_phosphate_contacted_oxygen_count": 3,
+        "sep_phosphate_contacting_partner_residue_count": 3,
+    }
 
 
 def test_alignment_and_directional_rmsd_primitives() -> None:

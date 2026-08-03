@@ -28,7 +28,10 @@ from adapted_bindcraft_functions.pyrosetta_utils import (
     score_monomer_surface_hydrophobicity,
 )
 from fold_mpnn_esmfold2 import load_manifest, load_mpnn_records
-from pyrosetta_interface_metrics import sep_phosphate_polar_contact_metrics
+from pyrosetta_interface_metrics import (
+    SEP_PHOSPHATE_POLAR_CONTACT_CUTOFF,
+    sep_phosphate_polar_contact_metrics,
+)
 
 
 AA1_TO_3 = {
@@ -820,7 +823,17 @@ def score_on_target(
             from adapted_bindcraft_functions.pyrosetta_utils import init_pyrosetta_once
 
             pose = init_pyrosetta_once().pose_from_file(str(relaxed))
-            pair["sep_phosphate"] = sep_phosphate_polar_contact_metrics(pose, "A", "B")
+            pair["sep_phosphate"] = sep_phosphate_polar_contact_metrics(
+                pose,
+                "A",
+                "B",
+                cutoff=float(
+                    limits.get(
+                        "sep_phosphate_contact_cutoff_angstrom",
+                        SEP_PHOSPHATE_POLAR_CONTACT_CUTOFF,
+                    )
+                ),
+            )
         results[kind] = pair
 
         checks[f"{kind}.mean_plddt"] = criterion(
@@ -865,6 +878,20 @@ def score_on_target(
         "ge",
         float(limits["sep_phosphate_contacts_min"]),
     )
+    if "sep_phosphate_contacted_oxygens_min" in limits:
+        checks["AB_SEP.sep_phosphate_contacted_oxygen_count"] = criterion(
+            sep["sep_phosphate_contacted_oxygen_count"],
+            "ge",
+            float(limits["sep_phosphate_contacted_oxygens_min"]),
+        )
+    if "sep_phosphate_contacting_partner_residues_min" in limits:
+        checks[
+            "AB_SEP.sep_phosphate_contacting_partner_residue_count"
+        ] = criterion(
+            sep["sep_phosphate_contacting_partner_residue_count"],
+            "ge",
+            float(limits["sep_phosphate_contacting_partner_residues_min"]),
+        )
     decision = {"pass": all(item["pass"] for item in checks.values()), "checks": checks}
     return decision["pass"], {"metrics": results, "decision": decision}
 

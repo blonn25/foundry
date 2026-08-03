@@ -21,6 +21,8 @@ METRIC_KEYS = (
     "sep_phosphate_hbond_count",
     "sep_phosphate_polar_contact_count",
     "sep_phosphate_bidentate_count",
+    "sep_phosphate_contacted_oxygen_count",
+    "sep_phosphate_contacting_partner_residue_count",
     "pyrosetta_metrics_error",
 )
 PHOSPHATE_ACCEPTOR_ATOMS = {"O1P", "O2P", "O3P"}
@@ -190,6 +192,16 @@ def sep_phosphate_polar_contact_metrics(
     ``sep_phosphate_bidentate_count`` is residue-based. A partner residue counts
     once when its sidechain makes contacts to at least two unique SEP phosphate
     oxygens through at least two unique sidechain heavy atoms.
+
+    ``sep_phosphate_contacted_oxygen_count`` counts distinct SEP phosphate
+    oxygen atoms participating in at least one polar contact. For the single
+    SEP residue used by rfd3_system campaigns, a value of three means O1P, O2P,
+    and O3P are all contacted.
+
+    ``sep_phosphate_contacting_partner_residue_count`` counts distinct partner
+    residues participating in the same polar-contact set. Unlike the
+    bidentate metric, this coverage metric includes qualifying backbone polar
+    atoms because the total polar-contact metric includes them as well.
     """
 
     sep_indices = sep_residue_indices(pose, shared_chain)
@@ -197,10 +209,14 @@ def sep_phosphate_polar_contact_metrics(
         return {
             "sep_phosphate_polar_contact_count": "",
             "sep_phosphate_bidentate_count": "",
+            "sep_phosphate_contacted_oxygen_count": "",
+            "sep_phosphate_contacting_partner_residue_count": "",
         }
 
     phosphate_atoms = phosphate_atom_indices(pose, sep_indices)
     polar_contact_count = 0
+    contacted_oxygens: set[tuple[int, str]] = set()
+    contacting_partner_residues: set[int] = set()
     residue_contacts: dict[int, dict[str, set[Any]]] = {}
     for partner_residue in range(1, pose.total_residue() + 1):
         if residue_chain(pose, partner_residue) != partner_chain:
@@ -216,6 +232,8 @@ def sep_phosphate_polar_contact_metrics(
                 if distance > cutoff:
                     continue
                 polar_contact_count += 1
+                contacted_oxygens.add((sep_residue, sep_atom_name))
+                contacting_partner_residues.add(partner_residue)
                 if not is_sidechain_heavy_atom(pose, partner_residue, partner_atom):
                     continue
                 entry = residue_contacts.setdefault(
@@ -233,6 +251,10 @@ def sep_phosphate_polar_contact_metrics(
     return {
         "sep_phosphate_polar_contact_count": polar_contact_count,
         "sep_phosphate_bidentate_count": bidentate_count,
+        "sep_phosphate_contacted_oxygen_count": len(contacted_oxygens),
+        "sep_phosphate_contacting_partner_residue_count": len(
+            contacting_partner_residues
+        ),
     }
 
 
