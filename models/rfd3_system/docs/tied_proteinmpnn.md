@@ -93,6 +93,12 @@ The generated ProteinMPNN config writes both FASTA sequence outputs and
 redesigned CIF structures by default.  Add `--no-write-structures` if you only
 want FASTA sequence outputs.
 
+Use `--omit C` (equivalently, `--omit CYS`) to prevent cysteine from being
+sampled at designable positions. The helper normalizes one-letter residue codes
+to Foundry ProteinMPNN's three-letter token names and writes the resulting list
+into every generated input record. Omission does not mutate or unfix residues
+listed in `fixed_residues`.
+
 The generated config uses Foundry's bundled original ProteinMPNN checkpoint:
 
 ```text

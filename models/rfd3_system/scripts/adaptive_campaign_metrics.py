@@ -108,6 +108,14 @@ def parse_args() -> argparse.Namespace:
     cleanup.add_argument("--rfd3-dir", type=Path, required=True)
     cleanup.add_argument("--mpnn-dir", type=Path, required=True)
     cleanup.add_argument("--fold-dir", type=Path, action="append", default=[])
+    cleanup.add_argument(
+        "--config",
+        type=Path,
+        help=(
+            "Resolved campaign config. When omitted, coupling diagnostics are "
+            "retained for backward compatibility."
+        ),
+    )
     return parser.parse_args()
 
 
@@ -1077,14 +1085,29 @@ def build_promotion_manifest(args: argparse.Namespace) -> None:
 def cleanup_round(args: argparse.Namespace) -> None:
     round_dir = args.round_dir.resolve()
     diagnostics = round_dir / "diagnostics"
-    diagnostics.mkdir(parents=True, exist_ok=True)
     rfd3_dir = args.rfd3_dir.resolve()
+    keep_diagnostics = True
+    if args.config is not None:
+        config = load_config(args.config.resolve())
+        keep_diagnostics = bool(
+            config.get("retention", {}).get("keep_coupling_diagnostics", True)
+        )
 
-    # One track JSON per model contains the complete shared coupling trajectory.
-    for source in sorted(rfd3_dir.glob("*track1_model_*.json")):
-        shutil.copy2(source, diagnostics / source.name)
-    for source in sorted(rfd3_dir.glob("*coupling*.png")):
-        shutil.copy2(source, diagnostics / source.name)
+    removed_diagnostic_files = 0
+    if keep_diagnostics:
+        diagnostics.mkdir(parents=True, exist_ok=True)
+        # One track JSON per model contains the complete coupling trajectory.
+        for source in sorted(rfd3_dir.glob("*track1_model_*.json")):
+            shutil.copy2(source, diagnostics / source.name)
+        for source in sorted(rfd3_dir.glob("*coupling*.png")):
+            shutil.copy2(source, diagnostics / source.name)
+    else:
+        for pattern in ("*track[12]_model_*.json", "*coupling*.png"):
+            for source in sorted(rfd3_dir.glob(pattern)):
+                source.unlink()
+                removed_diagnostic_files += 1
+        if diagnostics.is_dir():
+            shutil.rmtree(diagnostics)
 
     roots = [
         rfd3_dir,
@@ -1105,7 +1128,12 @@ def cleanup_round(args: argparse.Namespace) -> None:
                 removed += 1
     print(
         json.dumps(
-            {"removed_structure_files": removed, "diagnostics": str(diagnostics)}
+            {
+                "removed_structure_files": removed,
+                "removed_diagnostic_files": removed_diagnostic_files,
+                "coupling_diagnostics_retained": keep_diagnostics,
+                "diagnostics": str(diagnostics) if keep_diagnostics else "",
+            }
         )
     )
 

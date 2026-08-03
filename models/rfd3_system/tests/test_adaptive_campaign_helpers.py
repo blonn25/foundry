@@ -180,6 +180,15 @@ def test_loads_selected_rfd_model_indices(tmp_path: Path) -> None:
     assert tied_input.load_model_indices(None) is None
 
 
+def test_normalizes_mpnn_omit_residue_tokens() -> None:
+    assert tied_input.normalize_omit_residues("C") == ["CYS"]
+    assert tied_input.normalize_omit_residues("CYS,M") == ["CYS", "MET"]
+    assert tied_input.normalize_omit_residues('["C", "CYS", "W"]') == [
+        "CYS",
+        "TRP",
+    ]
+
+
 def test_finite_pdb_conversion_drops_nonfinite_atoms(tmp_path: Path) -> None:
     pdb = tmp_path / "input.pdb"
     pdb.write_text(

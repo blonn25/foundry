@@ -33,6 +33,28 @@ from biotite.structure import AtomArray
 TRACK_OUTPUT_RE = re.compile(r"(?P<prefix>.+)_track(?P<track>[12])_model_(?P<model>\d+)$")
 DEFAULT_FIXED_A_SOURCES = "A237,A238,A240"
 DEFAULT_FIXED_B_SOURCES = "B56,B129,B130,B133"
+AA1_TO_3 = {
+    "A": "ALA",
+    "R": "ARG",
+    "N": "ASN",
+    "D": "ASP",
+    "C": "CYS",
+    "Q": "GLN",
+    "E": "GLU",
+    "G": "GLY",
+    "H": "HIS",
+    "I": "ILE",
+    "L": "LEU",
+    "K": "LYS",
+    "M": "MET",
+    "F": "PHE",
+    "P": "PRO",
+    "S": "SER",
+    "T": "THR",
+    "W": "TRP",
+    "Y": "TYR",
+    "V": "VAL",
+}
 
 
 @dataclass(frozen=True)
@@ -165,6 +187,14 @@ def parse_args() -> argparse.Namespace:
         help="ProteinMPNN structure_noise value in Angstroms.",
     )
     parser.add_argument(
+        "--omit",
+        default="",
+        help=(
+            "Comma-separated one- or three-letter residue types to omit from "
+            "ProteinMPNN sampling, for example 'C' or 'CYS,MET'."
+        ),
+    )
+    parser.add_argument(
         "--seed",
         type=int,
         default=123,
@@ -213,6 +243,36 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     return parser.parse_args()
+
+
+def normalize_omit_residues(value: str | list[str] | None) -> list[str]:
+    """Return unique three-letter residue tokens accepted by Foundry MPNN."""
+
+    if value is None:
+        return []
+    if isinstance(value, list):
+        raw_values = value
+    else:
+        text = str(value).strip()
+        if not text:
+            return []
+        if text.startswith("["):
+            parsed = json.loads(text)
+            if not isinstance(parsed, list):
+                raise ValueError("--omit JSON syntax must contain a list")
+            raw_values = parsed
+        else:
+            raw_values = text.split(",")
+
+    normalized: list[str] = []
+    for raw_value in raw_values:
+        token = str(raw_value).strip().upper()
+        if not token:
+            continue
+        token = AA1_TO_3.get(token, token)
+        if token not in normalized:
+            normalized.append(token)
+    return normalized
 
 
 def load_atom_array(path: Path) -> AtomArray:
@@ -624,6 +684,10 @@ def build_combined_input(
         "symmetry_residues": symmetry_residues,
         "temperature": args.temperature,
     }
+    omitted_residues = normalize_omit_residues(args.omit)
+    if args.prepare_for == "mpnn":
+        if omitted_residues:
+            input_config["omit"] = omitted_residues
     manifest_entry = {
         "model_index": pair.model_index,
         "track1_cif": str(pair.track1_cif),
@@ -644,6 +708,8 @@ def build_combined_input(
         "symmetry_group_count": len(symmetry_residues),
         "symmetry_residues": symmetry_residues,
     }
+    if args.prepare_for == "mpnn":
+        manifest_entry["omit"] = omitted_residues
     return input_config, manifest_entry
 
 
@@ -759,6 +825,7 @@ def main() -> None:
                 "write_structures": args.write_structures,
                 "temperature": args.temperature,
                 "structure_noise": args.structure_noise,
+                "omit": normalize_omit_residues(args.omit),
             }
         )
         write_mpnn_outputs(out_dir, inputs, manifest)
