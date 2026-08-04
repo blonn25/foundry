@@ -379,7 +379,6 @@ def pr_relax(
 
             VirtualRootMover().apply(pose)
             root_atom = AtomID(1, pose.total_residue())
-            root_xyz = pose.xyz(root_atom)
             pdb_info = pose.pdb_info()
             for chain_id, residue_number, atom_name in selected_atom_restraints:
                 pose_index = int(pdb_info.pdb2pose(str(chain_id), int(residue_number)))
@@ -400,7 +399,7 @@ def pr_relax(
                     CoordinateConstraint(
                         atom_id,
                         root_atom,
-                        start_xyz - root_xyz,
+                        start_xyz,
                         HarmonicFunc(0.0, float(selected_atom_restraint_sd)),
                     )
                 )
