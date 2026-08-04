@@ -432,10 +432,6 @@ def pr_relax(
         fastrelax.apply(pose)
 
         if tracked_atoms:
-            # The absolute coordinate constraints anchor the pose to the input
-            # frame. AlignChainMover does not account for the added root
-            # reliably and can apply a spurious rigid-body transform after a
-            # successful restrained relaxation.
             restraint_report["constraint_count_after_relax"] = len(
                 pose.constraint_set().get_all_constraints()
             )
@@ -443,6 +439,19 @@ def pr_relax(
             restraint_report["coordinate_constraint_score_after_relax"] = float(
                 pose.energies().total_energies()[coordinate_constraint]
             )
+
+            # CoordinateConstraint preserves the selected geometry relative
+            # to the virtual root, but that root and the molecular pose may
+            # undergo a common rigid-body transform. Re-align the first real
+            # protein chain to the input before reporting Cartesian movement
+            # and writing the structure. Using chain 1 avoids the virtual-root
+            # ambiguity of BindCraft's original whole-pose chain 0 alignment.
+            align = AlignChainMover()
+            align.source_chain(1)
+            align.target_chain(1)
+            align.pose(start_pose)
+            align.apply(pose)
+
             displacements = []
             for chain_id, residue_number, atom_name, atom_id, start_xyz in tracked_atoms:
                 displacement = float((pose.xyz(atom_id) - start_xyz).norm())
