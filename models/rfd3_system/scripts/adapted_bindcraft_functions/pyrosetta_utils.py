@@ -324,12 +324,31 @@ def pr_relax(
     sidechains_movable=True,
     jumps_movable=False,
     constrain_to_start_coordinates=True,
+    selected_atom_restraints=None,
+    selected_atom_restraint_sd=0.1,
+    selected_atom_restraint_weight=1.0,
 ):
-    """Run BindCraft-style FastRelax with backward-compatible defaults."""
+    """Run BindCraft-style FastRelax with optional atom-coordinate restraints.
+
+    ``selected_atom_restraints`` is an iterable of ``(chain, residue, atom)``
+    triples.  The selected atoms receive harmonic coordinate constraints to
+    their input positions through a virtual root.  These are strong positional
+    restraints, not exact Cartesian freezes; the returned report quantifies
+    their displacement so campaign code can audit the approximation.
+    """
     pr = init_pyrosetta_once()
     from pyrosetta.rosetta.core.kinematics import MoveMap
     from pyrosetta.rosetta.protocols.relax import FastRelax
     from pyrosetta.rosetta.protocols.simple_moves import AlignChainMover
+
+    restraint_report = {
+        "enabled": bool(selected_atom_restraints),
+        "harmonic_sd_angstrom": float(selected_atom_restraint_sd),
+        "score_weight": float(selected_atom_restraint_weight),
+        "atoms": [],
+        "maximum_displacement_angstrom": 0.0,
+        "mean_displacement_angstrom": 0.0,
+    }
 
     if not os.path.exists(relaxed_pdb_path):
         # Generate pose
@@ -345,12 +364,75 @@ def pr_relax(
         # Run FastRelax
         fastrelax = FastRelax()
         scorefxn = pr.get_fa_scorefxn()
+        tracked_atoms = []
+        if selected_atom_restraints:
+            if selected_atom_restraint_sd <= 0:
+                raise ValueError("selected_atom_restraint_sd must be positive")
+            if selected_atom_restraint_weight <= 0:
+                raise ValueError("selected_atom_restraint_weight must be positive")
+
+            from pyrosetta.rosetta.core.id import AtomID
+            from pyrosetta.rosetta.core.scoring import coordinate_constraint
+            from pyrosetta.rosetta.core.scoring.constraints import CoordinateConstraint
+            from pyrosetta.rosetta.core.scoring.func import HarmonicFunc
+            from pyrosetta.rosetta.protocols.simple_moves import VirtualRootMover
+
+            VirtualRootMover().apply(pose)
+            root_atom = AtomID(1, pose.total_residue())
+            pdb_info = pose.pdb_info()
+            for chain_id, residue_number, atom_name in selected_atom_restraints:
+                pose_index = int(pdb_info.pdb2pose(str(chain_id), int(residue_number)))
+                if pose_index <= 0:
+                    raise ValueError(
+                        f"Restrained residue {chain_id}{residue_number} is absent from {pdb_file}"
+                    )
+                residue = pose.residue(pose_index)
+                atom_name = str(atom_name).strip()
+                if not residue.has(atom_name):
+                    raise ValueError(
+                        f"Restrained atom {chain_id}{residue_number}:{atom_name} "
+                        f"is absent from {pdb_file}"
+                    )
+                atom_id = AtomID(residue.atom_index(atom_name), pose_index)
+                start_xyz = pose.xyz(atom_id)
+                pose.add_constraint(
+                    CoordinateConstraint(
+                        atom_id,
+                        root_atom,
+                        start_xyz,
+                        HarmonicFunc(0.0, float(selected_atom_restraint_sd)),
+                    )
+                )
+                tracked_atoms.append(
+                    (str(chain_id), int(residue_number), atom_name, atom_id, start_xyz)
+                )
+            scorefxn.set_weight(
+                coordinate_constraint, float(selected_atom_restraint_weight)
+            )
         fastrelax.set_scorefxn(scorefxn)
         fastrelax.set_movemap(mmf) # set MoveMap
         fastrelax.max_iter(max_iterations) # Rosetta's default is much larger
         fastrelax.min_type("lbfgs_armijo_nonmonotone")
         fastrelax.constrain_relax_to_start_coords(constrain_to_start_coordinates)
         fastrelax.apply(pose)
+
+        if tracked_atoms:
+            displacements = []
+            for chain_id, residue_number, atom_name, atom_id, start_xyz in tracked_atoms:
+                displacement = float((pose.xyz(atom_id) - start_xyz).norm())
+                displacements.append(displacement)
+                restraint_report["atoms"].append(
+                    {
+                        "chain": chain_id,
+                        "residue": residue_number,
+                        "atom": atom_name,
+                        "displacement_angstrom": displacement,
+                    }
+                )
+            restraint_report["maximum_displacement_angstrom"] = max(displacements)
+            restraint_report["mean_displacement_angstrom"] = sum(displacements) / len(
+                displacements
+            )
 
         # Align relaxed structure to original trajectory
         align = AlignChainMover()
@@ -370,3 +452,4 @@ def pr_relax(
         # output relaxed and aligned PDB
         pose.dump_pdb(str(relaxed_pdb_path))
         clean_pdb(relaxed_pdb_path)
+    return restraint_report

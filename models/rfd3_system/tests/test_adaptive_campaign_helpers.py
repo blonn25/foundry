@@ -306,6 +306,66 @@ def test_relax_structure_creates_destination_directory(
     assert observed["parent_exists"]
 
 
+def test_mapped_atom_restraints_expand_to_pyrosetta_triplets() -> None:
+    entry = type(
+        "Entry",
+        (),
+        {
+            "mapped_atom_restraints": {
+                "track1": {"A30": ["OG", "P"], "B12": ["NZ"]},
+                "track2": {},
+            }
+        },
+    )()
+    assert metrics.selected_atom_restraints(entry, "track1") == [
+        ("A", 30, "OG"),
+        ("A", 30, "P"),
+        ("B", 12, "NZ"),
+    ]
+    assert metrics.selected_atom_restraints(entry, "track2") == []
+
+
+def test_on_target_confidence_gate_uses_both_pairs_and_raw_ipae() -> None:
+    payloads = {
+        ("design", kind): {
+            "task_id": f"design_{kind}",
+            "samples": [
+                {
+                    "cif": f"{kind}.cif",
+                    "plddt_mean": 0.9,
+                    "iptm": 0.7,
+                    "mean_ipae": 9.0 if kind == "AB_SEP" else 11.0,
+                    "mean_pae": 15.0,
+                }
+            ],
+        }
+        for kind in ("AB_SEP", "DC_SER")
+    }
+    config = {
+        "early_stopping": {"enabled": True},
+        "filters": {
+            "on_target": {
+                "mean_plddt_min": 0.8,
+                "iptm_min": 0.5,
+                "mean_ipae_raw_max": 10,
+            }
+        },
+    }
+    passed, result = metrics.score_on_target_confidence(
+        "design", payloads, config
+    )
+    assert not passed
+    assert result["metrics"]["AB_SEP"]["mean_pae_raw"] == 15.0
+    assert not result["decision"]["checks"]["DC_SER.mean_ipae_raw"]["pass"]
+
+    config["early_stopping"]["enabled"] = False
+    passed, result = metrics.score_on_target_confidence(
+        "design", payloads, config
+    )
+    assert passed
+    assert not result["decision"]["would_pass"]
+
+
 def test_fold_state_parser_and_task_seed_are_stable() -> None:
     assert folding.parse_states("AB_SEP,DC_SER") == {"AB_SEP", "DC_SER"}
     assert folding.parse_states(None) is None

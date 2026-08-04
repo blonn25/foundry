@@ -69,6 +69,10 @@ class SequenceDesignManifestEntry:
     track1_cif: str
     track2_cif: str
     combined_structure: str
+    track1_json: str = ""
+    track2_json: str = ""
+    track2_shared_chain_id: str = "A"
+    mapped_atom_restraints: dict[str, dict[str, list[str]]] | None = None
 
     @property
     def mpnn_name(self) -> str:
@@ -247,6 +251,16 @@ def _manifest_entry(raw: dict[str, Any], backend: str) -> SequenceDesignManifest
         track1_cif=str(raw["track1_cif"]),
         track2_cif=str(raw["track2_cif"]),
         combined_structure=combined,
+        track1_json=str(raw.get("track1_json", "")),
+        track2_json=str(raw.get("track2_json", "")),
+        track2_shared_chain_id=str(raw.get("track2_shared_chain_id", "A")),
+        mapped_atom_restraints={
+            str(track): {
+                str(label): [str(atom) for atom in atoms]
+                for label, atoms in mapping.items()
+            }
+            for track, mapping in raw.get("mapped_atom_restraints", {}).items()
+        },
     )
 
 

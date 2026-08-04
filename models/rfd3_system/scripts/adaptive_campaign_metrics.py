@@ -99,12 +99,19 @@ def parse_args() -> argparse.Namespace:
     prefilter.add_argument("--round-dir", type=Path, required=True)
     prefilter.add_argument("--config", type=Path, required=True)
 
+    thread_relax = subparsers.add_parser("thread-relax")
+    thread_relax.add_argument("sequence_design_output_dir", type=Path)
+    thread_relax.add_argument("--round-dir", type=Path, required=True)
+    thread_relax.add_argument("--config", type=Path, required=True)
+    thread_relax.add_argument("--out", type=Path, required=True)
+
     geometry = subparsers.add_parser("rfd-geometry-prefilter")
     geometry.add_argument("rfd_output_dir", type=Path)
     geometry.add_argument("--round-dir", type=Path, required=True)
     geometry.add_argument("--config", type=Path, required=True)
 
     for command, stage in (
+        ("score-on-target-confidence", "on_target_confidence"),
         ("score-on-target", "on_target"),
         ("score-monomers", "monomer"),
         ("score-off-target", "off_target"),
@@ -113,6 +120,16 @@ def parse_args() -> argparse.Namespace:
         scorer.add_argument("fold_output_dir", type=Path)
         scorer.add_argument("--round-dir", type=Path, required=True)
         scorer.add_argument("--config", type=Path, required=True)
+        scorer.add_argument(
+            "--design-keys-json",
+            type=Path,
+            help="Optional stage-input subset for parallel scoring workers.",
+        )
+        scorer.add_argument(
+            "--passing-out",
+            type=Path,
+            help="Optional worker-local passing manifest instead of the stage default.",
+        )
         scorer.set_defaults(stage=stage)
 
     package = subparsers.add_parser("build-promotion-manifest")
@@ -356,11 +373,17 @@ def thread_track_structure(
 
 
 def relax_structure(
-    input_path: Path, output_path: Path, config: dict[str, Any]
-) -> None:
+    input_path: Path,
+    output_path: Path,
+    config: dict[str, Any],
+    selected_atom_restraints: list[tuple[str, int, str]] | None = None,
+) -> dict[str, Any]:
     settings = config["fast_relax"]
     output_path.parent.mkdir(parents=True, exist_ok=True)
-    pr_relax(
+    report_path = output_path.with_suffix(output_path.suffix + ".restraints.json")
+    if output_path.is_file() and report_path.is_file():
+        return read_json(report_path)
+    report = pr_relax(
         input_path,
         output_path,
         max_iterations=int(settings["max_iterations"]),
@@ -368,7 +391,34 @@ def relax_structure(
         sidechains_movable=bool(settings["sidechains_movable"]),
         jumps_movable=bool(settings["jumps_movable"]),
         constrain_to_start_coordinates=bool(settings["constrain_to_start_coordinates"]),
+        selected_atom_restraints=selected_atom_restraints,
+        selected_atom_restraint_sd=float(
+            settings.get("selected_atom_restraint_sd", 0.1)
+        ),
+        selected_atom_restraint_weight=float(
+            settings.get("selected_atom_restraint_weight", 1.0)
+        ),
     )
+    atomic_write_json(report_path, report)
+    return report
+
+
+def selected_atom_restraints(
+    entry: Any, track: str
+) -> list[tuple[str, int, str]]:
+    """Expand a manifest's already-mapped residue/atom restraints."""
+
+    mappings = (entry.mapped_atom_restraints or {}).get(track, {})
+    restraints: list[tuple[str, int, str]] = []
+    for label, atoms in mappings.items():
+        match = LABEL_RE.fullmatch(label)
+        if match is None:
+            raise ValueError(f"Invalid mapped restraint residue label: {label!r}")
+        restraints.extend(
+            (match.group("chain"), int(match.group("resid")), str(atom))
+            for atom in atoms
+        )
+    return restraints
 
 
 def interface_metrics(
@@ -810,6 +860,10 @@ def prefilter_record(
     dc_relaxed = threaded_dir / f"{safe_name(record.design_key)}_DC_relaxed.pdb"
 
     try:
+        ab_restraints = selected_atom_restraints(entry, "track1")
+        dc_restraints = selected_atom_restraints(entry, "track2")
+        ab_restraint_report: dict[str, Any] = {}
+        dc_restraint_report: dict[str, Any] = {}
         if not ab_relaxed.is_file():
             thread_track_structure(
                 normalize_path(entry.track1_cif),
@@ -818,20 +872,33 @@ def prefilter_record(
                 mapped_fixed_labels(entry, {"A", "B"}),
                 {"A": "A", "B": "B"},
             )
-            relax_structure(ab_unrelaxed, ab_relaxed, config)
+            ab_restraint_report = relax_structure(
+                ab_unrelaxed, ab_relaxed, config, ab_restraints
+            )
+        elif ab_relaxed.with_suffix(ab_relaxed.suffix + ".restraints.json").is_file():
+            ab_restraint_report = read_json(
+                ab_relaxed.with_suffix(ab_relaxed.suffix + ".restraints.json")
+            )
         if not dc_relaxed.is_file():
             thread_track_structure(
                 normalize_path(entry.track2_cif),
                 dc_unrelaxed,
                 {"D": record.chains["D"], "C": record.chains["C"]},
                 mapped_fixed_labels(entry, {"D", "C"}),
-                {"A": "D", "C": "C"},
+                {entry.track2_shared_chain_id: "D", "C": "C"},
             )
-            relax_structure(dc_unrelaxed, dc_relaxed, config)
+            dc_restraint_report = relax_structure(
+                dc_unrelaxed, dc_relaxed, config, dc_restraints
+            )
+        elif dc_relaxed.with_suffix(dc_relaxed.suffix + ".restraints.json").is_file():
+            dc_restraint_report = read_json(
+                dc_relaxed.with_suffix(dc_relaxed.suffix + ".restraints.json")
+            )
 
         pair_metrics = {
             "AB": {
                 "relaxed_pdb": str(ab_relaxed),
+                "selected_atom_restraints": ab_restraint_report,
                 "interface": interface_metrics(ab_relaxed, "A", "B"),
                 "monomers": {
                     "A": monomer_metrics(ab_relaxed, "A"),
@@ -840,6 +907,7 @@ def prefilter_record(
             },
             "DC": {
                 "relaxed_pdb": str(dc_relaxed),
+                "selected_atom_restraints": dc_restraint_report,
                 "interface": interface_metrics(dc_relaxed, "D", "C"),
                 "monomers": {
                     "D": monomer_metrics(dc_relaxed, "D"),
@@ -872,6 +940,64 @@ def prefilter_record(
         ab_relaxed.unlink(missing_ok=True)
         dc_relaxed.unlink(missing_ok=True)
     return passed, result
+
+
+def thread_relax(args: argparse.Namespace) -> None:
+    """Thread and relax all sequence designs without applying prefilters."""
+
+    config = load_config(args.config)
+    round_dir = args.round_dir.resolve()
+    sequence_design_dir = args.sequence_design_output_dir.resolve()
+    backend = str(config["sequence_design"]["backend"])
+    manifest = load_sequence_design_manifest(sequence_design_dir, backend)
+    records = load_sequence_design_records(sequence_design_dir, manifest, backend)
+    entries: list[dict[str, Any]] = []
+    for record in records:
+        entry = manifest[record.mpnn_name]
+        validate_shared_sequences(record, entry)
+        threaded_dir = round_dir / "artifacts" / "threaded_relaxed"
+        ab_raw = round_dir / "work" / f"{safe_name(record.design_key)}_AB_threaded.pdb"
+        dc_raw = round_dir / "work" / f"{safe_name(record.design_key)}_DC_threaded.pdb"
+        ab_relaxed = threaded_dir / f"{safe_name(record.design_key)}_AB_relaxed.pdb"
+        dc_relaxed = threaded_dir / f"{safe_name(record.design_key)}_DC_relaxed.pdb"
+        thread_track_structure(
+            normalize_path(entry.track1_cif),
+            ab_raw,
+            {"A": record.chains["A"], "B": record.chains["B"]},
+            mapped_fixed_labels(entry, {"A", "B"}),
+            {"A": "A", "B": "B"},
+        )
+        thread_track_structure(
+            normalize_path(entry.track2_cif),
+            dc_raw,
+            {"D": record.chains["D"], "C": record.chains["C"]},
+            mapped_fixed_labels(entry, {"D", "C"}),
+            {entry.track2_shared_chain_id: "D", "C": "C"},
+        )
+        ab_report = relax_structure(
+            ab_raw, ab_relaxed, config, selected_atom_restraints(entry, "track1")
+        )
+        dc_report = relax_structure(
+            dc_raw, dc_relaxed, config, selected_atom_restraints(entry, "track2")
+        )
+        ab_raw.unlink(missing_ok=True)
+        dc_raw.unlink(missing_ok=True)
+        entries.append(
+            {
+                "design_key": record.design_key,
+                "input_name": record.input_name,
+                "chains": record.chains,
+                "ab_relaxed": str(ab_relaxed),
+                "dc_relaxed": str(dc_relaxed),
+                "fixed_a_source_residues": entry.fixed_a_source_residues,
+                "fixed_residues": entry.fixed_residues,
+                "mapped_atom_restraints": entry.mapped_atom_restraints or {},
+                "ab_restraint_report": ab_report,
+                "dc_restraint_report": dc_report,
+            }
+        )
+    atomic_write_json(args.out, {"count": len(entries), "entries": entries})
+    print(json.dumps({"stage": "thread_relax", "count": len(entries)}))
 
 
 def prefilter(args: argparse.Namespace) -> None:
@@ -1008,6 +1134,44 @@ def score_on_target(
     return decision["pass"], {"metrics": results, "decision": decision}
 
 
+def score_on_target_confidence(
+    design_key: str,
+    payloads: dict[tuple[str, str], dict[str, Any]],
+    config: dict[str, Any],
+) -> tuple[bool, dict[str, Any]]:
+    """Gate on raw ESMFold2 confidence before expensive FastRelax scoring."""
+
+    limits = config["filters"]["on_target"]
+    gate_enabled = bool(config.get("early_stopping", {}).get("enabled", False))
+    results: dict[str, Any] = {}
+    checks: dict[str, Any] = {}
+    for kind in STAGE_KINDS["on_target"]:
+        fold_metrics = sample_metrics(payloads[(design_key, kind)])
+        results[kind] = fold_metrics
+        checks[f"{kind}.mean_plddt"] = criterion(
+            fold_metrics["mean_plddt"], "gt", float(limits["mean_plddt_min"])
+        )
+        checks[f"{kind}.iptm"] = criterion(
+            fold_metrics["iptm"], "gt", float(limits["iptm_min"])
+        )
+        checks[f"{kind}.mean_ipae_raw"] = criterion(
+            fold_metrics["mean_ipae_raw"],
+            "lt",
+            float(limits["mean_ipae_raw_max"]),
+        )
+    would_pass = all(check["pass"] for check in checks.values())
+    passed = would_pass if gate_enabled else True
+    return passed, {
+        "metrics": results,
+        "decision": {
+            "pass": passed,
+            "would_pass": would_pass,
+            "gate_enabled": gate_enabled,
+            "checks": checks,
+        },
+    }
+
+
 def score_monomers(
     design_key: str,
     payloads: dict[tuple[str, str], dict[str, Any]],
@@ -1087,21 +1251,30 @@ def score_stage(args: argparse.Namespace) -> None:
     stage = args.stage
     payloads = task_payloads(fold_dir)
     input_file = {
+        "on_target_confidence": "passing_prefilter.json",
         "on_target": "passing_prefilter.json",
         "monomer": "passing_on_target.json",
         "off_target": "passing_monomer.json",
     }[stage]
-    design_keys = read_design_keys(round_dir / input_file)
+    if stage == "on_target" and (
+        round_dir / "passing_on_target_confidence.json"
+    ).is_file():
+        input_file = "passing_on_target_confidence.json"
+    design_keys = read_design_keys(
+        args.design_keys_json if args.design_keys_json else round_dir / input_file
+    )
     passing: list[str] = []
     scorer = {
         "on_target": score_on_target,
         "monomer": score_monomers,
         "off_target": score_off_target,
-    }[stage]
+    }.get(stage)
+
+    expected_kinds = STAGE_KINDS.get(stage, STAGE_KINDS["on_target"])
 
     for design_key in design_keys:
         missing = [
-            kind for kind in STAGE_KINDS[stage] if (design_key, kind) not in payloads
+            kind for kind in expected_kinds if (design_key, kind) not in payloads
         ]
         if missing:
             result = {
@@ -1115,7 +1288,14 @@ def score_stage(args: argparse.Namespace) -> None:
             passed = False
         else:
             try:
-                passed, result = scorer(design_key, payloads, round_dir, config)
+                if stage == "on_target_confidence":
+                    passed, result = score_on_target_confidence(
+                        design_key, payloads, config
+                    )
+                else:
+                    passed, result = scorer(
+                        design_key, payloads, round_dir, config
+                    )
             except Exception as error:
                 passed = False
                 result = {
@@ -1126,7 +1306,24 @@ def score_stage(args: argparse.Namespace) -> None:
         if passed:
             passing.append(design_key)
         else:
-            for kind in STAGE_KINDS[stage]:
+            if stage == "on_target_confidence":
+                update_metrics(
+                    round_dir,
+                    design_key,
+                    {
+                        "stages": {
+                            "on_target": {
+                                "metrics": {},
+                                "decision": {
+                                    "pass": False,
+                                    "status": "not_evaluated_due_to_confidence_gate",
+                                    "checks": {},
+                                },
+                            }
+                        }
+                    },
+                )
+            for kind in expected_kinds:
                 payload = payloads.get((design_key, kind), {})
                 task_id = payload.get("task_id")
                 if task_id:
@@ -1143,11 +1340,16 @@ def score_stage(args: argparse.Namespace) -> None:
                         ).unlink(missing_ok=True)
 
     output_file = {
+        "on_target_confidence": "passing_on_target_confidence.json",
         "on_target": "passing_on_target.json",
         "monomer": "passing_monomer.json",
         "off_target": "passing_final.json",
     }[stage]
-    write_design_keys(round_dir / output_file, passing, stage=stage)
+    write_design_keys(
+        args.passing_out if args.passing_out else round_dir / output_file,
+        passing,
+        stage=stage,
+    )
     print(
         json.dumps({"stage": stage, "total": len(design_keys), "passing": len(passing)})
     )
@@ -1253,6 +1455,8 @@ def main() -> None:
         rfd_geometry_prefilter(args)
     elif args.command == "prefilter":
         prefilter(args)
+    elif args.command == "thread-relax":
+        thread_relax(args)
     elif args.command.startswith("score-"):
         score_stage(args)
     elif args.command == "build-promotion-manifest":
