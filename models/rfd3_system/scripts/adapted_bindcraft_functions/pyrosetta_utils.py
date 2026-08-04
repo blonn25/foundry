@@ -415,7 +415,11 @@ def pr_relax(
         fastrelax.set_movemap(mmf) # set MoveMap
         fastrelax.max_iter(max_iterations) # Rosetta's default is much larger
         fastrelax.min_type("lbfgs_armijo_nonmonotone")
-        fastrelax.constrain_relax_to_start_coords(constrain_to_start_coordinates)
+        if constrain_to_start_coordinates:
+            # Calling the setter with False resets FastRelax's coordinate-
+            # constraint handling and can discard custom selected-atom
+            # constraints already present on the pose.
+            fastrelax.constrain_relax_to_start_coords(True)
         fastrelax.apply(pose)
 
         if tracked_atoms:
