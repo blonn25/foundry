@@ -379,6 +379,7 @@ def pr_relax(
 
             VirtualRootMover().apply(pose)
             root_atom = AtomID(1, pose.total_residue())
+            root_xyz = pose.xyz(root_atom)
             pdb_info = pose.pdb_info()
             for chain_id, residue_number, atom_name in selected_atom_restraints:
                 pose_index = int(pdb_info.pdb2pose(str(chain_id), int(residue_number)))
@@ -395,11 +396,12 @@ def pr_relax(
                     )
                 atom_id = AtomID(residue.atom_index(atom_name), pose_index)
                 start_xyz = pose.xyz(atom_id)
+                target_from_root = start_xyz - root_xyz
                 pose.add_constraint(
                     CoordinateConstraint(
                         atom_id,
                         root_atom,
-                        start_xyz,
+                        target_from_root,
                         HarmonicFunc(0.0, float(selected_atom_restraint_sd)),
                     )
                 )
@@ -417,10 +419,10 @@ def pr_relax(
         fastrelax.apply(pose)
 
         if tracked_atoms:
-            # The coordinate constraints already anchor the pose to the input
-            # frame through a virtual root. AlignChainMover does not account
-            # for that added root reliably and can apply a spurious rigid-body
-            # transform after a successful restrained relaxation.
+            # The root-relative coordinate constraints anchor the pose to the
+            # input frame. AlignChainMover does not account for the added root
+            # reliably and can apply a spurious rigid-body transform after a
+            # successful restrained relaxation.
             displacements = []
             for chain_id, residue_number, atom_name, atom_id, start_xyz in tracked_atoms:
                 displacement = float((pose.xyz(atom_id) - start_xyz).norm())
