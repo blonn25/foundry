@@ -346,6 +346,10 @@ def pr_relax(
         "harmonic_sd_angstrom": float(selected_atom_restraint_sd),
         "score_weight": float(selected_atom_restraint_weight),
         "atoms": [],
+        "constraint_count_before_relax": 0,
+        "constraint_count_after_relax": 0,
+        "coordinate_constraint_score_before_relax": 0.0,
+        "coordinate_constraint_score_after_relax": 0.0,
         "maximum_displacement_angstrom": 0.0,
         "mean_displacement_angstrom": 0.0,
     }
@@ -411,6 +415,13 @@ def pr_relax(
             scorefxn.set_weight(
                 coordinate_constraint, float(selected_atom_restraint_weight)
             )
+            restraint_report["constraint_count_before_relax"] = len(
+                pose.constraint_set().get_all_constraints()
+            )
+            scorefxn(pose)
+            restraint_report["coordinate_constraint_score_before_relax"] = float(
+                pose.energies().total_energies()[coordinate_constraint]
+            )
         fastrelax.set_scorefxn(scorefxn)
         fastrelax.set_movemap(mmf) # set MoveMap
         fastrelax.max_iter(max_iterations) # Rosetta's default is much larger
@@ -427,6 +438,13 @@ def pr_relax(
             # input frame. AlignChainMover does not account for the added root
             # reliably and can apply a spurious rigid-body transform after a
             # successful restrained relaxation.
+            restraint_report["constraint_count_after_relax"] = len(
+                pose.constraint_set().get_all_constraints()
+            )
+            scorefxn(pose)
+            restraint_report["coordinate_constraint_score_after_relax"] = float(
+                pose.energies().total_energies()[coordinate_constraint]
+            )
             displacements = []
             for chain_id, residue_number, atom_name, atom_id, start_xyz in tracked_atoms:
                 displacement = float((pose.xyz(atom_id) - start_xyz).norm())
@@ -436,6 +454,9 @@ def pr_relax(
                         "chain": chain_id,
                         "residue": residue_number,
                         "atom": atom_name,
+                        "observed_atom": pose.residue(atom_id.rsd())
+                        .atom_name(atom_id.atomno())
+                        .strip(),
                         "displacement_angstrom": displacement,
                     }
                 )
