@@ -15,6 +15,8 @@ import os
 from pathlib import Path
 from typing import Any
 
+import numpy as np
+
 from .biopython_utils import hotspot_residues
 from .generic_utils import clean_pdb
 
@@ -350,6 +352,7 @@ def pr_relax(
         "constraint_count_after_relax": 0,
         "coordinate_constraint_score_before_relax": 0.0,
         "coordinate_constraint_score_after_relax": 0.0,
+        "displacement_frame": "selected_atom_rigid_superposition",
         "maximum_displacement_angstrom": 0.0,
         "mean_displacement_angstrom": 0.0,
     }
@@ -440,22 +443,37 @@ def pr_relax(
                 pose.energies().total_energies()[coordinate_constraint]
             )
 
-            # CoordinateConstraint preserves the selected geometry relative
-            # to the virtual root, but that root and the molecular pose may
-            # undergo a common rigid-body transform. Re-align the first real
-            # protein chain to the input before reporting Cartesian movement
-            # and writing the structure. Using chain 1 avoids the virtual-root
-            # ambiguity of BindCraft's original whole-pose chain 0 alignment.
-            align = AlignChainMover()
-            align.source_chain(1)
-            align.target_chain(1)
-            align.pose(start_pose)
-            align.apply(pose)
+            # The virtual root and molecular pose may undergo a common rigid-
+            # body transform. Audit internal restraint fidelity after an
+            # optimal superposition of the selected atoms so that harmless
+            # global motion is not reported as restraint failure.
+            start_coordinates = np.asarray(
+                [[xyz.x, xyz.y, xyz.z] for *_, xyz in tracked_atoms], dtype=float
+            )
+            final_coordinates = np.asarray(
+                [
+                    [pose.xyz(atom_id).x, pose.xyz(atom_id).y, pose.xyz(atom_id).z]
+                    for *_, atom_id, _ in tracked_atoms
+                ],
+                dtype=float,
+            )
+            start_center = start_coordinates.mean(axis=0)
+            final_center = final_coordinates.mean(axis=0)
+            covariance = (final_coordinates - final_center).T @ (
+                start_coordinates - start_center
+            )
+            left, _, right_transpose = np.linalg.svd(covariance)
+            rotation = left @ right_transpose
+            if np.linalg.det(rotation) < 0:
+                left[:, -1] *= -1
+                rotation = left @ right_transpose
+            aligned_coordinates = (final_coordinates - final_center) @ rotation + start_center
+            displacements = np.linalg.norm(
+                aligned_coordinates - start_coordinates, axis=1
+            ).tolist()
 
-            displacements = []
-            for chain_id, residue_number, atom_name, atom_id, start_xyz in tracked_atoms:
-                displacement = float((pose.xyz(atom_id) - start_xyz).norm())
-                displacements.append(displacement)
+            for tracked, displacement in zip(tracked_atoms, displacements, strict=True):
+                chain_id, residue_number, atom_name, atom_id, _ = tracked
                 restraint_report["atoms"].append(
                     {
                         "chain": chain_id,
@@ -464,12 +482,12 @@ def pr_relax(
                         "observed_atom": pose.residue(atom_id.rsd())
                         .atom_name(atom_id.atomno())
                         .strip(),
-                        "displacement_angstrom": displacement,
+                        "displacement_angstrom": float(displacement),
                     }
                 )
-            restraint_report["maximum_displacement_angstrom"] = max(displacements)
-            restraint_report["mean_displacement_angstrom"] = sum(displacements) / len(
-                displacements
+            restraint_report["maximum_displacement_angstrom"] = float(max(displacements))
+            restraint_report["mean_displacement_angstrom"] = float(
+                sum(displacements) / len(displacements)
             )
         else:
             # Preserve the original BindCraft behavior for unrestrained runs.
