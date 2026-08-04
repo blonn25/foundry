@@ -416,14 +416,11 @@ def pr_relax(
         fastrelax.constrain_relax_to_start_coords(constrain_to_start_coordinates)
         fastrelax.apply(pose)
 
-        # Align relaxed structure to original trajectory
-        align = AlignChainMover()
-        align.source_chain(0)
-        align.target_chain(0)
-        align.pose(start_pose)
-        align.apply(pose)
-
         if tracked_atoms:
+            # The coordinate constraints already anchor the pose to the input
+            # frame through a virtual root. AlignChainMover does not account
+            # for that added root reliably and can apply a spurious rigid-body
+            # transform after a successful restrained relaxation.
             displacements = []
             for chain_id, residue_number, atom_name, atom_id, start_xyz in tracked_atoms:
                 displacement = float((pose.xyz(atom_id) - start_xyz).norm())
@@ -440,6 +437,13 @@ def pr_relax(
             restraint_report["mean_displacement_angstrom"] = sum(displacements) / len(
                 displacements
             )
+        else:
+            # Preserve the original BindCraft behavior for unrestrained runs.
+            align = AlignChainMover()
+            align.source_chain(0)
+            align.target_chain(0)
+            align.pose(start_pose)
+            align.apply(pose)
 
         # Copy B factors from start_pose to pose
         for resid in range(1, pose.total_residue() + 1):
