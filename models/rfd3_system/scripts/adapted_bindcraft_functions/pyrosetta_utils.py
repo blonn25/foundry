@@ -379,6 +379,7 @@ def pr_relax(
 
             VirtualRootMover().apply(pose)
             root_atom = AtomID(1, pose.total_residue())
+            root_xyz = pose.xyz(root_atom)
             pdb_info = pose.pdb_info()
             for chain_id, residue_number, atom_name in selected_atom_restraints:
                 pose_index = int(pdb_info.pdb2pose(str(chain_id), int(residue_number)))
@@ -399,7 +400,7 @@ def pr_relax(
                     CoordinateConstraint(
                         atom_id,
                         root_atom,
-                        start_xyz,
+                        start_xyz - root_xyz,
                         HarmonicFunc(0.0, float(selected_atom_restraint_sd)),
                     )
                 )
@@ -415,6 +416,13 @@ def pr_relax(
         fastrelax.min_type("lbfgs_armijo_nonmonotone")
         fastrelax.constrain_relax_to_start_coords(constrain_to_start_coordinates)
         fastrelax.apply(pose)
+
+        # Align relaxed structure to original trajectory
+        align = AlignChainMover()
+        align.source_chain(0)
+        align.target_chain(0)
+        align.pose(start_pose)
+        align.apply(pose)
 
         if tracked_atoms:
             displacements = []
@@ -433,13 +441,6 @@ def pr_relax(
             restraint_report["mean_displacement_angstrom"] = sum(displacements) / len(
                 displacements
             )
-
-        # Align relaxed structure to original trajectory
-        align = AlignChainMover()
-        align.source_chain(0)
-        align.target_chain(0)
-        align.pose(start_pose)
-        align.apply(pose)
 
         # Copy B factors from start_pose to pose
         for resid in range(1, pose.total_residue() + 1):
