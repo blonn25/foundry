@@ -402,6 +402,11 @@ def pr_relax(
                     )
                 atom_id = AtomID(residue.atom_index(atom_name), pose_index)
                 start_xyz = pose.xyz(atom_id)
+                start_coordinates = (
+                    float(start_xyz.x),
+                    float(start_xyz.y),
+                    float(start_xyz.z),
+                )
                 pose.add_constraint(
                     CoordinateConstraint(
                         atom_id,
@@ -411,7 +416,13 @@ def pr_relax(
                     )
                 )
                 tracked_atoms.append(
-                    (str(chain_id), int(residue_number), atom_name, atom_id, start_xyz)
+                    (
+                        str(chain_id),
+                        int(residue_number),
+                        atom_name,
+                        atom_id,
+                        start_coordinates,
+                    )
                 )
             scorefxn.set_weight(
                 coordinate_constraint, float(selected_atom_restraint_weight)
@@ -448,7 +459,7 @@ def pr_relax(
             # optimal superposition of the selected atoms so that harmless
             # global motion is not reported as restraint failure.
             start_coordinates = np.asarray(
-                [[xyz.x, xyz.y, xyz.z] for *_, xyz in tracked_atoms], dtype=float
+                [coordinates for *_, coordinates in tracked_atoms], dtype=float
             )
             final_coordinates = np.asarray(
                 [
