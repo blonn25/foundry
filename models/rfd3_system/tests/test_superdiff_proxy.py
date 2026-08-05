@@ -17,6 +17,38 @@ def test_proxy_kappa_keeps_matching_updates_balanced():
     assert torch.allclose(diagnostics.proxy_residual, torch.zeros(2))
 
 
+@pytest.mark.parametrize("rho", [0.0, 1.0e-3, 1.0])
+def test_half_norm_weight_is_an_exact_equal_mix(rho):
+    delta_1 = torch.tensor(
+        [
+            [[1.0, 2.0, 0.0], [0.5, 0.0, 1.0]],
+            [[-1.0, 0.0, 2.0], [0.0, 3.0, 0.5]],
+        ]
+    )
+    delta_2 = torch.tensor(
+        [
+            [[0.0, 1.0, 1.0], [1.5, 0.0, 0.0]],
+            [[1.0, 1.0, 0.0], [0.0, 1.0, -0.5]],
+        ]
+    )
+
+    diagnostics = solve_two_track_proxy_kappa(
+        delta_1,
+        delta_2,
+        norm_weight=0.5,
+        regularization_rho=rho,
+        kappa_min=0.0,
+        kappa_max=1.0,
+    )
+    expected = torch.full((2,), 0.5)
+
+    assert torch.allclose(diagnostics.raw_kappa, expected, atol=1e-6, rtol=0)
+    assert torch.allclose(
+        diagnostics.regularized_kappa, expected, atol=1e-6, rtol=0
+    )
+    assert torch.allclose(diagnostics.kappa, expected, atol=1e-6, rtol=0)
+
+
 def test_proxy_kappa_equalizes_documented_proxy_equation():
     delta_1 = torch.tensor([[[1.0, 0.0, 0.0], [0.0, 0.5, 0.0]]])
     delta_2 = torch.tensor([[[0.0, 1.0, 0.0], [0.0, 0.25, 0.0]]])
