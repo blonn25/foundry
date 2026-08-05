@@ -453,3 +453,10 @@ def test_omitted_amino_acids_allow_fixed_positions_only() -> None:
         assert "A2" in str(error)
     else:
         raise AssertionError("Expected a designable omitted residue to fail")
+
+
+if __name__ == "__main__":
+    # The production Foundry image omits pytest. Keep the focused prefilter
+    # regression runnable directly for lightweight cluster validation.
+    test_prefilters_apply_all_sep_coordination_thresholds()
+    print("prefilter direct test passed")
