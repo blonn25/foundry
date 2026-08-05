@@ -19,6 +19,18 @@ import pyrosetta_interface_metrics as interface_metrics  # noqa: E402
 import sequence_design_io as sequence_io  # noqa: E402
 
 
+def test_thread_relax_auto_workers_follow_slurm_allocation(monkeypatch) -> None:
+    monkeypatch.setenv("SLURM_CPUS_PER_TASK", "8")
+    assert metrics._resolve_worker_count("auto", 20) == 8
+    assert metrics._resolve_worker_count("auto", 3) == 3
+    assert metrics._resolve_worker_count(2, 20) == 2
+
+
+def test_thread_relax_workers_default_to_one_outside_slurm(monkeypatch) -> None:
+    monkeypatch.delenv("SLURM_CPUS_PER_TASK", raising=False)
+    assert metrics._resolve_worker_count("auto", 10) == 1
+
+
 def test_filter_threshold_operators_have_requested_boundary_semantics() -> None:
     assert not metrics.criterion(0.5, "gt", 0.5)["pass"]
     assert not metrics.criterion(6, "lt", 6)["pass"]

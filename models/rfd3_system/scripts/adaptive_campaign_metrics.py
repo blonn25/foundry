@@ -13,9 +13,11 @@ import argparse
 import gzip
 import json
 import math
+import multiprocessing
 import os
 import re
 import shutil
+from concurrent.futures import ProcessPoolExecutor
 from pathlib import Path
 from typing import Any, Iterable
 
@@ -104,6 +106,11 @@ def parse_args() -> argparse.Namespace:
     thread_relax.add_argument("--round-dir", type=Path, required=True)
     thread_relax.add_argument("--config", type=Path, required=True)
     thread_relax.add_argument("--out", type=Path, required=True)
+    thread_relax.add_argument(
+        "--workers",
+        default="1",
+        help="Spawned PyRosetta workers, or 'auto' for SLURM_CPUS_PER_TASK.",
+    )
 
     geometry = subparsers.add_parser("rfd-geometry-prefilter")
     geometry.add_argument("rfd_output_dir", type=Path)
@@ -944,24 +951,43 @@ def prefilter_record(
     return passed, result
 
 
-def thread_relax(args: argparse.Namespace) -> None:
-    """Thread and relax all sequence designs without applying prefilters."""
+def _resolve_worker_count(value: Any, task_count: int) -> int:
+    """Resolve a requested process count against the current SLURM allocation."""
 
-    config = load_config(args.config)
-    round_dir = args.round_dir.resolve()
-    sequence_design_dir = args.sequence_design_output_dir.resolve()
-    backend = str(config["sequence_design"]["backend"])
-    manifest = load_sequence_design_manifest(sequence_design_dir, backend)
-    records = load_sequence_design_records(sequence_design_dir, manifest, backend)
-    entries: list[dict[str, Any]] = []
-    for record in records:
-        entry = manifest[record.mpnn_name]
-        validate_shared_sequences(record, entry)
-        threaded_dir = round_dir / "artifacts" / "threaded_relaxed"
-        ab_raw = round_dir / "work" / f"{safe_name(record.design_key)}_AB_threaded.pdb"
-        dc_raw = round_dir / "work" / f"{safe_name(record.design_key)}_DC_threaded.pdb"
-        ab_relaxed = threaded_dir / f"{safe_name(record.design_key)}_AB_relaxed.pdb"
-        dc_relaxed = threaded_dir / f"{safe_name(record.design_key)}_DC_relaxed.pdb"
+    if task_count < 1:
+        return 0
+    raw_allocated = os.environ.get("SLURM_CPUS_PER_TASK", "1")
+    try:
+        allocated = int(raw_allocated)
+    except ValueError as error:
+        raise ValueError(
+            f"Invalid SLURM_CPUS_PER_TASK={raw_allocated!r}"
+        ) from error
+    if allocated < 1:
+        raise ValueError(f"Invalid SLURM_CPUS_PER_TASK={raw_allocated!r}")
+    if value is None or str(value).lower() == "auto":
+        requested = allocated
+    else:
+        try:
+            requested = int(value)
+        except (TypeError, ValueError) as error:
+            raise ValueError("--workers must be 'auto' or a positive integer") from error
+        if requested < 1:
+            raise ValueError("--workers must be 'auto' or a positive integer")
+    return max(1, min(requested, allocated, task_count))
+
+
+def _thread_relax_record(task: tuple[Any, Any, Path, dict[str, Any]]) -> dict[str, Any]:
+    """Thread and relax one tied A/B/C/D sequence set in an isolated process."""
+
+    record, entry, round_dir, config = task
+    validate_shared_sequences(record, entry)
+    threaded_dir = round_dir / "artifacts" / "threaded_relaxed"
+    ab_raw = round_dir / "work" / f"{safe_name(record.design_key)}_AB_threaded.pdb"
+    dc_raw = round_dir / "work" / f"{safe_name(record.design_key)}_DC_threaded.pdb"
+    ab_relaxed = threaded_dir / f"{safe_name(record.design_key)}_AB_relaxed.pdb"
+    dc_relaxed = threaded_dir / f"{safe_name(record.design_key)}_DC_relaxed.pdb"
+    try:
         thread_track_structure(
             normalize_path(entry.track1_cif),
             ab_raw,
@@ -982,24 +1008,60 @@ def thread_relax(args: argparse.Namespace) -> None:
         dc_report = relax_structure(
             dc_raw, dc_relaxed, config, selected_atom_restraints(entry, "track2")
         )
+    finally:
         ab_raw.unlink(missing_ok=True)
         dc_raw.unlink(missing_ok=True)
-        entries.append(
-            {
-                "design_key": record.design_key,
-                "input_name": record.input_name,
-                "chains": record.chains,
-                "ab_relaxed": str(ab_relaxed),
-                "dc_relaxed": str(dc_relaxed),
-                "fixed_a_source_residues": entry.fixed_a_source_residues,
-                "fixed_residues": entry.fixed_residues,
-                "mapped_atom_restraints": entry.mapped_atom_restraints or {},
-                "ab_restraint_report": ab_report,
-                "dc_restraint_report": dc_report,
-            }
+    return {
+        "design_key": record.design_key,
+        "input_name": record.input_name,
+        "chains": record.chains,
+        "ab_relaxed": str(ab_relaxed),
+        "dc_relaxed": str(dc_relaxed),
+        "fixed_a_source_residues": entry.fixed_a_source_residues,
+        "fixed_residues": entry.fixed_residues,
+        "mapped_atom_restraints": entry.mapped_atom_restraints or {},
+        "ab_restraint_report": ab_report,
+        "dc_restraint_report": dc_report,
+    }
+
+
+def thread_relax(args: argparse.Namespace) -> None:
+    """Thread and relax all sequence designs without applying prefilters."""
+
+    config = load_config(args.config)
+    round_dir = args.round_dir.resolve()
+    sequence_design_dir = args.sequence_design_output_dir.resolve()
+    backend = str(config["sequence_design"]["backend"])
+    manifest = load_sequence_design_manifest(sequence_design_dir, backend)
+    records = load_sequence_design_records(sequence_design_dir, manifest, backend)
+    tasks = [
+        (record, manifest[record.mpnn_name], round_dir, config) for record in records
+    ]
+    workers = _resolve_worker_count(args.workers, len(tasks))
+    if workers <= 1:
+        entries = [_thread_relax_record(task) for task in tasks]
+    else:
+        # Each spawned process owns an independent PyRosetta runtime. Restrict
+        # nested BLAS/OpenMP pools so N workers consume N allocated CPU cores.
+        for variable in (
+            "OMP_NUM_THREADS",
+            "MKL_NUM_THREADS",
+            "OPENBLAS_NUM_THREADS",
+            "NUMEXPR_NUM_THREADS",
+        ):
+            os.environ[variable] = "1"
+        context = multiprocessing.get_context("spawn")
+        with ProcessPoolExecutor(max_workers=workers, mp_context=context) as executor:
+            entries = list(executor.map(_thread_relax_record, tasks, chunksize=1))
+    atomic_write_json(
+        args.out,
+        {"count": len(entries), "worker_count": workers, "entries": entries},
+    )
+    print(
+        json.dumps(
+            {"stage": "thread_relax", "count": len(entries), "workers": workers}
         )
-    atomic_write_json(args.out, {"count": len(entries), "entries": entries})
-    print(json.dumps({"stage": "thread_relax", "count": len(entries)}))
+    )
 
 
 def prefilter(args: argparse.Namespace) -> None:
