@@ -383,6 +383,13 @@ kappa_raw =
     ||delta_1 - delta_2||^2
 ```
 
+When `w = 0.5`, the numerator is algebraically
+`0.5 * ||delta_1 - delta_2||^2`, so every nondegenerate solve gives
+`kappa_raw = 0.5`; the degenerate fallback is also `0.5`. The implementation
+returns this identity directly for `w = 0.5`. This avoids bfloat16 subtractive
+cancellation between independently accumulated numerator and denominator
+reductions and makes `w = 0.5` an exact equal-mixing control.
+
 ### Scale-aware regularization
 
 The raw solve becomes ill-conditioned when the two track updates are nearly

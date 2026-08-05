@@ -88,7 +88,9 @@ def solve_two_track_proxy_kappa(
 
     `regularization_rho=0` exactly preserves the legacy solve.  This remains a
     heuristic analogue of SuperDiff's density-control linear system; it is not
-    the Itô-density estimator and it does not use exact scores.
+    the Itô-density estimator and it does not use exact scores. At
+    `norm_weight=0.5`, the proxy algebra reduces exactly to `kappa=0.5`; that
+    identity is returned directly to avoid reduced-precision cancellation.
     """
 
     if not math.isfinite(regularization_rho) or regularization_rho < 0:
@@ -122,8 +124,19 @@ def solve_two_track_proxy_kappa(
         torch.ones_like(denominator),
         denominator,
     )
-    raw_kappa = numerator / safe_denominator
-    raw_kappa = torch.where(degenerate, torch.full_like(raw_kappa, 0.5), raw_kappa)
+    if norm_weight == 0.5:
+        # In exact arithmetic, the numerator above is 0.5 * denominator.  The
+        # independently accumulated bfloat16 reductions can nevertheless lose
+        # enough precision to perturb their ratio.  Preserve the exact control
+        # requested by w=0.5 instead of evaluating an avoidable cancellation.
+        raw_kappa = torch.full_like(denominator, 0.5)
+    else:
+        raw_kappa = numerator / safe_denominator
+        raw_kappa = torch.where(
+            degenerate,
+            torch.full_like(raw_kappa, 0.5),
+            raw_kappa,
+        )
 
     positive_scale = regularization_scale > 0
     safe_scale = torch.where(

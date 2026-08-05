@@ -31,8 +31,9 @@ rho = 0, 1e-5, 1e-4, 1e-3
 ```
 
 At `proxy_norm_weight=0.5`, kappa is always 0.5, so rho is irrelevant and only
-the `rho=0` averaging control is run.  The resulting grid contains 17 settings
-and 425 coupled backbones.
+the `rho=0` averaging control is run. The current solver returns this identity
+directly so bfloat16 cancellation cannot perturb the equal-mixing control. The
+resulting grid contains 17 settings and 425 coupled backbones.
 
 ## Primary Metric
 

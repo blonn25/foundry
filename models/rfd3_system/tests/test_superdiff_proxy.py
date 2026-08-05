@@ -49,6 +49,29 @@ def test_half_norm_weight_is_an_exact_equal_mix(rho):
     assert torch.allclose(diagnostics.kappa, expected, atol=1e-6, rtol=0)
 
 
+def test_half_norm_weight_is_bitwise_exact_with_bfloat16_updates():
+    # Large, nearly matching values expose cancellation when the equivalent
+    # numerator and denominator are accumulated independently in bfloat16.
+    delta_1 = torch.linspace(-100.0, 100.0, 3072, dtype=torch.bfloat16).reshape(
+        1, 1024, 3
+    )
+    delta_2 = (delta_1.float() + 0.125).to(torch.bfloat16)
+
+    diagnostics = solve_two_track_proxy_kappa(
+        delta_1,
+        delta_2,
+        norm_weight=0.5,
+        regularization_rho=1.0e-3,
+        kappa_min=0.0,
+        kappa_max=1.0,
+    )
+    expected = torch.full_like(diagnostics.kappa, 0.5)
+
+    assert torch.equal(diagnostics.raw_kappa, expected)
+    assert torch.equal(diagnostics.regularized_kappa, expected)
+    assert torch.equal(diagnostics.kappa, expected)
+
+
 def test_proxy_kappa_equalizes_documented_proxy_equation():
     delta_1 = torch.tensor([[[1.0, 0.0, 0.0], [0.0, 0.5, 0.0]]])
     delta_2 = torch.tensor([[[0.0, 1.0, 0.0], [0.0, 0.25, 0.0]]])

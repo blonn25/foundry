@@ -109,6 +109,10 @@ The raw solve chooses `kappa` so that:
 proxy_1(delta_mix) ~= proxy_2(delta_mix)
 ```
 
+`norm_weight=0.5` is the exact equal-mixing control. The solver returns
+`kappa=0.5` directly in this case to avoid bfloat16 cancellation in the
+otherwise equivalent numerator/denominator calculation.
+
 When rho is nonzero, a dimensionless reliability factor based on the update
 difference relative to the two update magnitudes shrinks the raw result toward
 `0.5` before clamping. This deliberately trades exact proxy equalization for
