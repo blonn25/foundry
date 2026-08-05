@@ -160,6 +160,15 @@ def parse_args() -> argparse.Namespace:
         ),
     )
     parser.add_argument(
+        "--state-specs-json",
+        type=Path,
+        help=(
+            "Optional JSON list defining arbitrary A/B/C/D chain combinations. "
+            "Each entry requires name and chains; sep_chain may be A or D. "
+            "This is mutually exclusive with --states."
+        ),
+    )
+    parser.add_argument(
         "--design-keys-json",
         type=Path,
         help=(
@@ -487,6 +496,7 @@ def build_fold_tasks(
     manifest: dict[str, ManifestEntry],
     sep_source_residue: str,
     states: set[str] | None = None,
+    state_specs: list[dict[str, Any]] | None = None,
 ) -> list[FoldTask]:
     parse_source_residue(sep_source_residue)
     tasks: list[FoldTask] = []
@@ -509,16 +519,45 @@ def build_fold_tasks(
             )
         a_seq_for_sep = replace_sequence_residue(chains["A"], a_sep_resid, "S")
         base = record.design_key
-        task_defs = [
-            ("AB_SEP", {"A": a_seq_for_sep, "B": chains["B"]}, "A", a_sep_resid),
-            ("DC_SER", {"D": chains["D"], "C": chains["C"]}, None, None),
-            ("AC_SEP", {"A": a_seq_for_sep, "C": chains["C"]}, "A", a_sep_resid),
-            ("DB_SER", {"D": chains["D"], "B": chains["B"]}, None, None),
-            ("A_SEP", {"A": a_seq_for_sep}, "A", a_sep_resid),
-            ("D_SER", {"D": chains["D"]}, None, None),
-            ("B", {"B": chains["B"]}, None, None),
-            ("C", {"C": chains["C"]}, None, None),
-        ]
+        if state_specs is None:
+            task_defs = [
+                ("AB_SEP", {"A": a_seq_for_sep, "B": chains["B"]}, "A", a_sep_resid),
+                ("DC_SER", {"D": chains["D"], "C": chains["C"]}, None, None),
+                ("AC_SEP", {"A": a_seq_for_sep, "C": chains["C"]}, "A", a_sep_resid),
+                ("DB_SER", {"D": chains["D"], "B": chains["B"]}, None, None),
+                ("A_SEP", {"A": a_seq_for_sep}, "A", a_sep_resid),
+                ("D_SER", {"D": chains["D"]}, None, None),
+                ("B", {"B": chains["B"]}, None, None),
+                ("C", {"C": chains["C"]}, None, None),
+            ]
+        else:
+            task_defs = []
+            for spec in state_specs:
+                name = str(spec["name"])
+                chain_ids = [str(chain) for chain in spec["chains"]]
+                missing = [chain for chain in chain_ids if chain not in chains]
+                if missing:
+                    raise ValueError(f"State {name!r} uses unavailable chains: {missing}")
+                sep_chain = spec.get("sep_chain")
+                if sep_chain not in (None, "A", "D"):
+                    raise ValueError(
+                        f"State {name!r} sep_chain must be A, D, or null"
+                    )
+                sep_resid = None
+                task_chains = {chain: chains[chain] for chain in chain_ids}
+                if sep_chain == "A":
+                    if "A" not in task_chains:
+                        raise ValueError(f"State {name!r} phosphorylates absent chain A")
+                    task_chains["A"] = a_seq_for_sep
+                    sep_resid = a_sep_resid
+                elif sep_chain == "D":
+                    if "D" not in task_chains:
+                        raise ValueError(f"State {name!r} phosphorylates absent chain D")
+                    task_chains["D"] = replace_sequence_residue(
+                        chains["D"], d_sep_resid, "S"
+                    )
+                    sep_resid = d_sep_resid
+                task_defs.append((name, task_chains, sep_chain, sep_resid))
         for complex_kind, task_chains, sep_chain, sep_resid in task_defs:
             if states is not None and complex_kind not in states:
                 continue
@@ -740,6 +779,35 @@ def parse_states(value: str | None) -> set[str] | None:
     return states
 
 
+def load_state_specs(path: Path | None) -> list[dict[str, Any]] | None:
+    if path is None:
+        return None
+    payload = read_json(path.resolve())
+    specs = payload.get("states") if isinstance(payload, dict) else payload
+    if not isinstance(specs, list) or not specs:
+        raise ValueError("--state-specs-json must contain a non-empty states list")
+    names: set[str] = set()
+    normalized = []
+    for raw in specs:
+        if not isinstance(raw, dict) or "name" not in raw or "chains" not in raw:
+            raise ValueError("Every state specification requires name and chains")
+        name = str(raw["name"])
+        if name in names:
+            raise ValueError(f"Duplicate state name: {name}")
+        chains = raw["chains"]
+        if not isinstance(chains, list) or not chains:
+            raise ValueError(f"State {name!r} must select at least one chain")
+        names.add(name)
+        normalized.append(
+            {
+                "name": name,
+                "chains": [str(chain) for chain in chains],
+                "sep_chain": raw.get("sep_chain"),
+            }
+        )
+    return normalized
+
+
 def run_fold(
     task: FoldTask,
     model: Any,
@@ -819,8 +887,17 @@ def main() -> None:
     passing = load_prefilter_pass_set(args.prefilter_summary)
     if args.prefilter_summary and not args.force_through_prefilter:
         records = [record for record in records if record.design_key in passing]
+    if args.states and args.state_specs_json:
+        raise ValueError("--states and --state-specs-json are mutually exclusive")
     states = parse_states(args.states)
-    tasks = build_fold_tasks(records, manifest, args.sep_source_residue, states=states)
+    state_specs = load_state_specs(args.state_specs_json)
+    tasks = build_fold_tasks(
+        records,
+        manifest,
+        args.sep_source_residue,
+        states=states,
+        state_specs=state_specs,
+    )
 
     planned_payload = {
         "sequence_design_backend": args.sequence_design_backend,
@@ -837,7 +914,12 @@ def main() -> None:
         "num_sequence_design_records_selected": len(records),
         "num_mpnn_records_selected": len(records),
         "num_fold_tasks": len(tasks),
-        "states": sorted(states) if states is not None else "all",
+        "states": (
+            state_specs
+            if state_specs is not None
+            else (sorted(states) if states is not None else "all")
+        ),
+        "state_specs_json": str(args.state_specs_json) if args.state_specs_json else "",
         "design_keys_json": str(args.design_keys_json) if args.design_keys_json else "",
         "resume": args.resume,
         "derive_task_seeds": args.derive_task_seeds,

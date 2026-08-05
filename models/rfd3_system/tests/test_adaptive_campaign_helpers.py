@@ -385,6 +385,50 @@ def test_fold_state_parser_and_task_seed_are_stable() -> None:
     )
 
 
+def test_fold_tasks_accept_configured_chain_combinations(tmp_path: Path) -> None:
+    state_path = tmp_path / "states.json"
+    state_path.write_text(
+        json.dumps(
+            {
+                "states": [
+                    {"name": "ABC_SEP", "chains": ["A", "B", "C"], "sep_chain": "A"},
+                    {"name": "DB", "chains": ["D", "B"], "sep_chain": None},
+                ]
+            }
+        )
+    )
+    state_specs = folding.load_state_specs(state_path)
+    entry = folding.ManifestEntry(
+        mpnn_name="input",
+        model_index=0,
+        fixed_a_source_residues=["A10"],
+        fixed_residues=["A2", "D2"],
+        chain_order=["A", "B", "D", "C"],
+        chain_lengths={"A": 3, "B": 2, "D": 3, "C": 2},
+        track1_cif="track1.cif",
+        track2_cif="track2.cif",
+    )
+    record = folding.MpnnRecord(
+        design_key="design",
+        mpnn_name="input",
+        model_index=0,
+        batch_index=0,
+        design_index=0,
+        sequence_recovery=None,
+        sequence="",
+        chains={"A": "ASA", "B": "GG", "D": "ASA", "C": "TT"},
+        mpnn_cif="design.cif",
+    )
+    tasks = folding.build_fold_tasks(
+        [record], {"input": entry}, "A10", state_specs=state_specs
+    )
+    assert [task.complex_kind for task in tasks] == ["ABC_SEP", "DB"]
+    assert tasks[0].chains == {"A": "ASA", "B": "GG", "C": "TT"}
+    assert tasks[0].sep_chain == "A"
+    assert tasks[0].sep_residue_one_based == 2
+    assert tasks[1].chains == {"D": "ASA", "B": "GG"}
+
+
 def test_caliby_records_use_structure_chain_ids_not_csv_order(tmp_path: Path) -> None:
     structure = tmp_path / "input_sample0.pdb"
     structure.write_text(
