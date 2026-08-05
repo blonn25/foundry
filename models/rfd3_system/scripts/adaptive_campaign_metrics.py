@@ -792,6 +792,7 @@ def apply_prefilters(
             "lt",
             float(limits["interface_unsat_hbonds_max"]),
         )
+    check_radius = bool(limits.get("radius_of_gyration_enabled", True))
     for chain in ("A", "B", "D", "C"):
         metrics = pair_metrics["AB" if chain in {"A", "B"} else "DC"]["monomers"][chain]
         checks[f"{chain}.surface_hydrophobicity"] = criterion(
@@ -799,11 +800,12 @@ def apply_prefilters(
             "lt",
             float(limits["surface_hydrophobicity_max"]),
         )
-        checks[f"{chain}.radius_of_gyration"] = criterion(
-            metrics["radius_of_gyration"],
-            "lt",
-            float(metrics["radius_of_gyration_limit"]),
-        )
+        if check_radius:
+            checks[f"{chain}.radius_of_gyration"] = criterion(
+                metrics["radius_of_gyration"],
+                "lt",
+                float(metrics["radius_of_gyration_limit"]),
+            )
     if include_sep_coordination and any(
         limit_key in limits for _, limit_key in SEP_COORDINATION_LIMITS
     ):

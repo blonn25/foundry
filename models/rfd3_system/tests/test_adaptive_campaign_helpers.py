@@ -98,6 +98,14 @@ def test_prefilters_apply_all_sep_coordination_thresholds() -> None:
     assert disabled["pass"]
     assert not any("sep_phosphate" in key for key in disabled["checks"])
 
+    # A forced end-to-end smoke may bypass only compactness while retaining the
+    # remaining prefilter calculations and decisions.
+    pair_metrics["AB"]["monomers"]["A"]["radius_of_gyration"] = 30.0
+    config["filters"]["prefilter"]["radius_of_gyration_enabled"] = False
+    no_radius = metrics.apply_prefilters(pair_metrics, config)
+    assert no_radius["pass"]
+    assert not any("radius_of_gyration" in key for key in no_radius["checks"])
+
 
 def test_sep_contact_metric_schema_includes_coverage_counts() -> None:
     expected = {
