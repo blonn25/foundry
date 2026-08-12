@@ -586,7 +586,8 @@ def sample_metrics(task_payload: dict[str, Any]) -> dict[str, Any]:
     samples = task_payload.get("samples", [])
     if len(samples) != 1:
         raise ValueError(
-            f"Expected exactly one ESMFold2 sample for {task_payload.get('task_id')}, "
+            f"Expected exactly one selected structure-prediction sample for "
+            f"{task_payload.get('task_id')}, "
             f"found {len(samples)}"
         )
     sample = samples[0]
