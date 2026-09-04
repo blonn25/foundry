@@ -2,6 +2,7 @@ import importlib.util
 import math
 import sys
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import torch
@@ -160,3 +161,20 @@ def test_fixed_probe_seed_is_deterministic():
     )
 
     assert all(torch.equal(a, b) for a, b in zip(first, second))
+
+
+@pytest.mark.parametrize("wrapped", [False, True])
+def test_schedule_resolution_supports_native_sampler_wrapper(wrapped):
+    sampler = SimpleNamespace(sigma_data=16, s_min=4e-4, s_max=160, p=7)
+    inference_sampler = SimpleNamespace(sampler=sampler) if wrapped else sampler
+    model = SimpleNamespace(inference_sampler=inference_sampler)
+    settings = flow.LikelihoodSettings(sequence_conditioning="masked")
+
+    sigma_data, sigma_min, sigma_max, power = flow._resolve_schedule(
+        model, settings
+    )
+
+    assert sigma_data == 16
+    assert sigma_min == pytest.approx(0.0064)
+    assert sigma_max == pytest.approx(2560)
+    assert power == 7

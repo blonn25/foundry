@@ -345,7 +345,7 @@ def _find_rfd3_model(wrapped: torch.nn.Module) -> torch.nn.Module:
 def _resolve_schedule(
     model: torch.nn.Module, settings: LikelihoodSettings
 ) -> tuple[float, float, float, float]:
-    sampler = model.inference_sampler
+    sampler = getattr(model.inference_sampler, "sampler", model.inference_sampler)
     sigma_data = float(sampler.sigma_data)
     native_min = sigma_data * float(sampler.s_min)
     native_max = sigma_data * float(sampler.s_max)
@@ -484,6 +484,9 @@ def run(args: argparse.Namespace) -> tuple[Path, Path]:
     features = prepared["features"]
     initializer_outputs = prepared["initializer_outputs"]
     diffusion_module = model.diffusion_module
+    native_sampler = getattr(
+        model.inference_sampler, "sampler", model.inference_sampler
+    )
     autocast = engine.trainer.fabric.autocast
 
     def denoiser(active_coordinates: torch.Tensor, sigma: float) -> torch.Tensor:
@@ -500,7 +503,7 @@ def run(args: argparse.Namespace) -> tuple[Path, Path]:
                 X_noisy_L=full,
                 t=sigma_tensor,
                 f=dict(features),
-                n_recycle=model.inference_sampler.n_recycle,
+                n_recycle=native_sampler.n_recycle,
                 **initializer_outputs,
             )
         denoised = output["X_L"] if isinstance(output, dict) else output
