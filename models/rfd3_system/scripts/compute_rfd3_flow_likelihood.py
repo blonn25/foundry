@@ -565,6 +565,9 @@ def run(args: argparse.Namespace) -> tuple[Path, Path]:
             "The scalar isotropic EDM interpretation omits RFD3's correlated "
             "COM training perturbation.",
             "Hutchinson probes approximate the high-dimensional divergence.",
+            "A finite fixed probe set is not exactly invariant to independently "
+            "rotating an input; keep paired structures in a common frame or "
+            "increase the probe count.",
             "Cleaned structures reconstruct omitted virtual atom14 slots canonically.",
             "Sparse attention neighbor identities are treated as piecewise constant.",
             "Compare scores only with identical topology, conditioning, schedule, "

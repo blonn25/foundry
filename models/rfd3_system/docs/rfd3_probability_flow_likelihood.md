@@ -110,6 +110,31 @@ residue A20. Use `select_fixed_atoms: false` to score every coordinate.
 - `masked` hides protein identities and matches backbone generation.
 - `observed` conditions the denoiser on the protein sequence in the file.
 
+The likelihood controls have the following meanings:
+
+- `integration_intervals` is the number of fixed RK4 intervals from low to
+  high noise. More intervals reduce ODE discretization error but increase cost
+  linearly; each interval evaluates four right-hand sides.
+- `hutchinson_probes` is the number of random trace probes per right-hand-side
+  evaluation. More probes reduce divergence-estimator variance but require one
+  additional reverse sweep per probe.
+- `probe_seed` fixes the Rademacher probes. Use the same value for every member
+  of a paired comparison so estimator noise can cancel as much as possible.
+- `precision` is `float32` or `bf16_mixed`. Use `float32` for final numerical
+  comparisons. Mixed precision is an exploratory speed/memory option, and its
+  values must not be compared directly with float32 values.
+- `gauge` is `auto` or `as_supplied`. `auto` removes the deterministic
+  translation described below and is the recommended setting.
+- `sigma_min`, `sigma_max`, and `schedule_power` optionally override the
+  checkpoint's native EDM endpoints and Karras schedule power. Leave them
+  unset unless conducting a controlled numerical study.
+- `progress_every` controls how many completed intervals separate progress
+  messages; it does not affect the estimate.
+
+Before interpreting small score differences, repeat a representative subset
+with more integration intervals and more probes. Numerical settings are part
+of the score definition and must be identical within a comparison.
+
 The scorer manages `input`, `partial_t`, centering, and exact-structure loading.
 Generation fields such as `contig`, `unindex`, `length`, and `symmetry` are
 rejected because they can rebuild the system instead of scoring the supplied
@@ -123,13 +148,19 @@ diagnostics but makes the terminal Gaussian term dependent on file placement.
 No rotational alignment is applied; the isotropic terminal prior is rotationally
 invariant and RFD3 is trained with random rigid augmentation.
 
+The exact divergence of an equivariant field is rotationally invariant, but a
+finite Hutchinson estimate is not exactly invariant for a fixed probe draw.
+Keep paired conformers in the same coordinate frame, as RFD3 track outputs are,
+and use more probes when independently oriented structures must be compared.
+Increasing the probe count reduces this estimator variance; it does not change
+the translation gauge.
+
 ## Running on CoreHPC
 
 Use the Foundry container in a GPU allocation:
 
 ```bash
-CONFIG=/project/software/foundry/models/rfd3_system/docs/examples/\
-rfd3_flow_likelihood_ligand.yaml
+CONFIG=/project/software/foundry/models/rfd3_system/docs/examples/rfd3_flow_likelihood_ligand.yaml
 
 scripts/foundry_exec.sh --gpu \
   env \
@@ -176,11 +207,16 @@ Only compare absolute NLL values when all of the following match:
 
 For different protein lengths, per-coordinate NLL is available but remains an
 exploratory normalization rather than a rigorous free-energy comparison.
+These are continuous coordinate densities measured in Angstrom units, so the
+log likelihood may be positive and the NLL may be negative. Only score
+differences under an identical coordinate convention are meaningful.
 
 The estimate differs from an exact model likelihood for several reasons:
 
 1. RFD3 provides a denoiser, so its score is inferred through the EDM identity.
 2. Hutchinson probes approximate rather than exactly compute divergence.
+   Finite-probe estimates can vary when the same structure is independently
+   rotated, although their expectation is rotationally invariant.
 3. RFD3's training noise includes a correlated center-of-mass perturbation that
    is not represented by the scalar isotropic probability-flow ODE.
 4. Sparse attention neighbors are selected under `no_grad`, making the learned
@@ -200,6 +236,33 @@ computed with identical numerical settings and probes. This can test whether a
 single-conformer design is preferentially scored in its intended context and
 whether adaptive/equal mixtures are more balanced, without interpreting the
 numbers as physical binding free energies.
+
+## Validation Snapshot
+
+Validation on CoreHPC on September 3, 2026 exercised the complete native RFD3
+checkpoint path, input preparation, reverse-mode divergence, RK4 integration,
+and output writing. A 150-residue tryptophan-conditioned example used 6,300
+active scalar coordinates and approximately 12-14 GB peak host RSS.
+
+- Jobs `1581233` and `1581235` repeated the 50-interval, 5-probe float32
+  calculation and produced exactly identical numerical outputs.
+- Paired track jobs `1581233` and `1581234` completed in 31-33 minutes on eight
+  CPU cores. GPU execution remains recommended for routine studies.
+- Jobs `1581298`-`1581301` and `1581755`-`1581758` varied integration and probe
+  resolution. For this one paired example, `NLL(track 2) - NLL(track 1)` was
+  `2.56` at 25 intervals/5 probes, `2.20` at 50/5, `3.41` at 100/5, `3.51` at
+  50/1, and `1.80` at 50/10. The preference direction was stable, but this is
+  not evidence that a sub-unit effect size is converged.
+- Job `1581395` confirmed the mixed-bfloat16 path, but float32 and mixed
+  precision produced materially different coarse-smoke values and must not be
+  mixed within a comparison.
+- Job `1581308` confirmed automatic translation centering to float32 numerical
+  tolerance. Job `1581304` demonstrated the documented finite-probe rotation
+  variance with a one-probe smoke calculation.
+
+These results validate execution, not likelihood calibration. Increase both
+interval and probe counts on a representative subset before choosing settings
+for a scientific comparison.
 
 ## References
 
