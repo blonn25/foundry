@@ -33,6 +33,9 @@ design is documented in
 [docs/tied_proteinmpnn.md](docs/tied_proteinmpnn.md).
 The controlled ProteinMPNN/ESMFold2-Fast designability experiment is described
 in [docs/proxy_designability_grid_001.md](docs/proxy_designability_grid_001.md).
+Post-hoc coordinate likelihood estimation through RFD3's probability-flow ODE
+is documented in
+[docs/rfd3_probability_flow_likelihood.md](docs/rfd3_probability_flow_likelihood.md).
 
 ## Active Layout
 
@@ -53,6 +56,8 @@ scripts/sequence_design_io.py            Normalize backend outputs by chain ID
 scripts/fold_tied_mpnn_designability.py  Fold only tied A+B and D+C complexes
 scripts/fold_mpnn_esmfold2.py             Fold selected backend states with local ESMFold2
 scripts/adaptive_campaign_metrics.py      Thread, relax, filter, and package adaptive rounds
+scripts/compute_rfd3_flow_likelihood.py
+                                          Estimate coordinate NLL by probability-flow ODE
 archived/                                Upstream RFD3 docs/assets kept for reference only
 ```
 

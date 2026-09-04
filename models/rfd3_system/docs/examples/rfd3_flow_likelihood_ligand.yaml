@@ -1,0 +1,21 @@
+# Score the protein coordinates conditional on a fixed ligand conformation.
+checkpoint_path: /weights/rfd3_latest.ckpt
+
+specification:
+  # Use the source chain/residue identity found in the input PDB or CIF.
+  ligand: L1
+  select_fixed_atoms:
+    L1: ALL
+  select_buried:
+    L1: ALL
+
+likelihood:
+  # Required. "masked" matches unconditional protein-backbone generation;
+  # "observed" conditions the coordinate model on the input protein sequence.
+  sequence_conditioning: masked
+  integration_intervals: 50
+  hutchinson_probes: 5
+  probe_seed: 123
+  precision: float32
+  gauge: auto
+  progress_every: 5
