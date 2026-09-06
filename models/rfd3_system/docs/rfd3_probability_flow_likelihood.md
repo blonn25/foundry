@@ -189,6 +189,9 @@ resident while preserving the single-input CLI and independent output files.
 The ligand-conformer pilot uses this interface to score both conformers with
 the same probes for each shared protein.
 
+CoreHPC GPU benchmark job `1626238` scored one 50-interval, 10-probe matched
+conformer pair in 5m24s on an H100 NVL with 14.0 GB peak host RSS.
+
 ## RFD3 State Reconstruction
 
 RFD3's input pipeline is reused for tokenization, conditioning, and atom14
