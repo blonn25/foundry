@@ -182,6 +182,13 @@ the sigma interval, RK4-weighted divergence, cumulative density correction,
 and active-coordinate norm. Reuse the same checkpoint, conditioning, schedule,
 precision, and `probe_seed` for paired comparisons.
 
+For repeated scoring in one allocation, import
+`RFD3FlowLikelihoodSession`, construct it once from the scoring YAML, and call
+`session.score(...)` for each input. This keeps the model and checkpoint hash
+resident while preserving the single-input CLI and independent output files.
+The ligand-conformer pilot uses this interface to score both conformers with
+the same probes for each shared protein.
+
 ## RFD3 State Reconstruction
 
 RFD3's input pipeline is reused for tokenization, conditioning, and atom14

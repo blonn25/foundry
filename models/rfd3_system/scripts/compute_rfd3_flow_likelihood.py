@@ -15,7 +15,7 @@ import json
 import math
 import time
 from contextlib import nullcontext
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from pathlib import Path
 from typing import Any, Callable
 
@@ -437,159 +437,206 @@ def _prepare_pipeline_input(
     )
 
 
-def run(args: argparse.Namespace) -> tuple[Path, Path]:
-    input_path = args.input.resolve()
-    config_path = args.config.resolve()
-    if not input_path.is_file():
-        raise FileNotFoundError(input_path)
-    if not config_path.is_file():
-        raise FileNotFoundError(config_path)
-    checkpoint_text, specification, settings = load_config(config_path)
+class RFD3FlowLikelihoodSession:
+    """Keep one RFD3 model resident while scoring independent structures."""
 
-    # Imports stay local so analytical tests do not need the complete Foundry stack.
-    from rfd3_system.engine import RFD3InferenceConfig, RFD3InferenceEngine
-
-    torch.set_float32_matmul_precision("high")
-    engine_config = RFD3InferenceConfig(
-        ckpt_path=checkpoint_text,
-        diffusion_batch_size=1,
-        inference_sampler={
-            "kind": "default",
-            "use_classifier_free_guidance": False,
-            "gamma_0": 0.0,
-            "step_scale": 1.0,
-            "allow_realignment": False,
-            "s_jitter_origin": 0.0,
-        },
-        specification={},
-        seed=settings.probe_seed,
-    )
-    engine = RFD3InferenceEngine(**engine_config)
-    precision_name = "32-true" if settings.precision == "float32" else "bf16-mixed"
-    engine._assign_override("trainer.precision", precision_name)
-    engine.initialize()
-    model = _find_rfd3_model(engine.trainer.state["model"])
-    model.eval()
-    for parameter in model.parameters():
-        parameter.requires_grad_(False)
-
-    sigma_data, sigma_min, sigma_max, power = _resolve_schedule(model, settings)
-    prepared, input_metadata = _prepare_pipeline_input(
-        engine, model, input_path, specification, settings, sigma_min
-    )
-    full_initial = prepared["coordinates"]
-    active_mask = prepared["active_mask"]
-    active_initial = full_initial[:, active_mask, :].contiguous()
-    fixed_template = full_initial.detach()
-    features = prepared["features"]
-    initializer_outputs = prepared["initializer_outputs"]
-    diffusion_module = model.diffusion_module
-    native_sampler = getattr(
-        model.inference_sampler, "sampler", model.inference_sampler
-    )
-    autocast = engine.trainer.fabric.autocast
-
-    def denoiser(active_coordinates: torch.Tensor, sigma: float) -> torch.Tensor:
-        full = fixed_template.index_copy(
-            1, torch.where(active_mask)[0], active_coordinates
+    def __init__(self, config_path: Path):
+        self.config_path = config_path.resolve()
+        if not self.config_path.is_file():
+            raise FileNotFoundError(self.config_path)
+        checkpoint_text, self.specification, self.settings = load_config(
+            self.config_path
         )
-        sigma_tensor = torch.tensor(
-            [sigma], device=full.device, dtype=full.dtype
+
+        # Imports stay local so analytical tests do not need the Foundry stack.
+        from rfd3_system.engine import RFD3InferenceConfig, RFD3InferenceEngine
+
+        torch.set_float32_matmul_precision("high")
+        engine_config = RFD3InferenceConfig(
+            ckpt_path=checkpoint_text,
+            diffusion_batch_size=1,
+            inference_sampler={
+                "kind": "default",
+                "use_classifier_free_guidance": False,
+                "gamma_0": 0.0,
+                "step_scale": 1.0,
+                "allow_realignment": False,
+                "s_jitter_origin": 0.0,
+            },
+            specification={},
+            seed=self.settings.probe_seed,
         )
-        # Neighbor selection is intentionally piecewise constant: RFD3 builds the
-        # sparse attention graph under no_grad at each field evaluation.
-        with autocast() if callable(autocast) else nullcontext():
-            output = diffusion_module(
-                X_noisy_L=full,
-                t=sigma_tensor,
-                f=dict(features),
-                n_recycle=native_sampler.n_recycle,
-                **initializer_outputs,
+        self.engine = RFD3InferenceEngine(**engine_config)
+        precision_name = (
+            "32-true" if self.settings.precision == "float32" else "bf16-mixed"
+        )
+        self.engine._assign_override("trainer.precision", precision_name)
+        self.engine.initialize()
+        self.model = _find_rfd3_model(self.engine.trainer.state["model"])
+        self.model.eval()
+        for parameter in self.model.parameters():
+            parameter.requires_grad_(False)
+
+        schedule = _resolve_schedule(self.model, self.settings)
+        self.sigma_data, self.sigma_min, self.sigma_max, self.power = schedule
+        self.checkpoint_path = Path(self.engine.ckpt_path)
+        self.checkpoint_sha256 = sha256_file(self.checkpoint_path)
+
+    def score(
+        self,
+        input_path: Path,
+        output_dir: Path,
+        *,
+        overwrite: bool = False,
+        probe_seed: int | None = None,
+    ) -> tuple[Path, Path]:
+        """Score one structure without rebuilding the model or checkpoint hash."""
+
+        input_path = input_path.resolve()
+        output_dir = output_dir.resolve()
+        if not input_path.is_file():
+            raise FileNotFoundError(input_path)
+        output_dir.mkdir(parents=True, exist_ok=True)
+        stem = _output_stem(input_path) + "_rfd3_flow_likelihood"
+        json_path = output_dir / f"{stem}.json"
+        csv_path = output_dir / f"{stem}_trace.csv"
+        if not overwrite and (json_path.exists() or csv_path.exists()):
+            raise FileExistsError(
+                f"Output already exists for {stem}; pass --overwrite to replace it."
             )
-        denoised = output["X_L"] if isinstance(output, dict) else output
-        return denoised[:, active_mask, :]
 
-    probes = make_rademacher_probes(
-        active_initial.shape,
-        count=settings.hutchinson_probes,
-        seed=settings.probe_seed,
-        device=active_initial.device,
-    )
-    started = time.time()
-    terminal, correction, trace = integrate_probability_flow_rk4(
-        active_initial,
-        denoiser_fn=denoiser,
-        sigma_min=sigma_min,
-        sigma_max=sigma_max,
-        schedule_power=power,
-        intervals=settings.integration_intervals,
-        probes=probes,
-        progress_every=settings.progress_every,
-    )
-    runtime_seconds = time.time() - started
-    terminal_log_prior = gaussian_log_probability(terminal, sigma_max)
-    log_likelihood = terminal_log_prior + correction
-    dimension = terminal.numel()
-    checkpoint_path = Path(engine.ckpt_path)
-
-    result = {
-        "method": "rfd3_probability_flow_ode_hutchinson_v1",
-        "interpretation": "approximate conditional coordinate log likelihood",
-        "input_path": str(input_path),
-        "input_sha256": sha256_file(input_path),
-        "config_path": str(config_path),
-        "checkpoint_path": str(checkpoint_path),
-        "checkpoint_sha256": sha256_file(checkpoint_path),
-        "specification": specification,
-        "likelihood_settings": asdict(settings),
-        "resolved_schedule": {
-            "sigma_data": sigma_data,
-            "sigma_min": sigma_min,
-            "sigma_max": sigma_max,
-            "schedule_power": power,
-        },
-        "state": input_metadata,
-        "terminal_log_prior": terminal_log_prior,
-        "log_density_correction": correction,
-        "estimated_log_likelihood": log_likelihood,
-        "estimated_negative_log_likelihood": -log_likelihood,
-        "log_likelihood_per_active_coordinate": log_likelihood / dimension,
-        "negative_log_likelihood_per_active_coordinate": -log_likelihood / dimension,
-        "terminal_normalized_squared_radius": float(
-            terminal.double().square().sum() / (dimension * sigma_max**2)
-        ),
-        "runtime_seconds": runtime_seconds,
-        "warnings": [
-            "This is a learned-flow energy, not a calibrated thermodynamic "
-            "free energy.",
-            "The scalar isotropic EDM interpretation omits RFD3's correlated "
-            "COM training perturbation.",
-            "Hutchinson probes approximate the high-dimensional divergence.",
-            "A finite fixed probe set is not exactly invariant to independently "
-            "rotating an input; keep paired structures in a common frame or "
-            "increase the probe count.",
-            "Cleaned structures reconstruct omitted virtual atom14 slots canonically.",
-            "Sparse attention neighbor identities are treated as piecewise constant.",
-            "Compare scores only with identical topology, conditioning, schedule, "
-            "checkpoint, and probe seed.",
-        ],
-    }
-
-    output_dir = args.output_dir.resolve()
-    output_dir.mkdir(parents=True, exist_ok=True)
-    stem = _output_stem(input_path) + "_rfd3_flow_likelihood"
-    json_path = output_dir / f"{stem}.json"
-    csv_path = output_dir / f"{stem}_trace.csv"
-    if not args.overwrite and (json_path.exists() or csv_path.exists()):
-        raise FileExistsError(
-            f"Output already exists for {stem}; pass --overwrite to replace it."
+        settings = (
+            self.settings
+            if probe_seed is None
+            else replace(self.settings, probe_seed=int(probe_seed))
         )
-    json_path.write_text(json.dumps(result, indent=2) + "\n")
-    with csv_path.open("w", newline="") as handle:
-        writer = csv.DictWriter(handle, fieldnames=list(trace[0]))
-        writer.writeheader()
-        writer.writerows(trace)
-    return json_path, csv_path
+        prepared, input_metadata = _prepare_pipeline_input(
+            self.engine,
+            self.model,
+            input_path,
+            self.specification,
+            settings,
+            self.sigma_min,
+        )
+        full_initial = prepared["coordinates"]
+        active_mask = prepared["active_mask"]
+        active_initial = full_initial[:, active_mask, :].contiguous()
+        fixed_template = full_initial.detach()
+        features = prepared["features"]
+        initializer_outputs = prepared["initializer_outputs"]
+        diffusion_module = self.model.diffusion_module
+        native_sampler = getattr(
+            self.model.inference_sampler,
+            "sampler",
+            self.model.inference_sampler,
+        )
+        autocast = self.engine.trainer.fabric.autocast
+
+        def denoiser(active_coordinates: torch.Tensor, sigma: float) -> torch.Tensor:
+            full = fixed_template.index_copy(
+                1, torch.where(active_mask)[0], active_coordinates
+            )
+            sigma_tensor = torch.tensor(
+                [sigma], device=full.device, dtype=full.dtype
+            )
+            # RFD3 rebuilds its sparse attention graph under no_grad at each call.
+            with autocast() if callable(autocast) else nullcontext():
+                output = diffusion_module(
+                    X_noisy_L=full,
+                    t=sigma_tensor,
+                    f=dict(features),
+                    n_recycle=native_sampler.n_recycle,
+                    **initializer_outputs,
+                )
+            denoised = output["X_L"] if isinstance(output, dict) else output
+            return denoised[:, active_mask, :]
+
+        probes = make_rademacher_probes(
+            active_initial.shape,
+            count=settings.hutchinson_probes,
+            seed=settings.probe_seed,
+            device=active_initial.device,
+        )
+        started = time.time()
+        terminal, correction, trace = integrate_probability_flow_rk4(
+            active_initial,
+            denoiser_fn=denoiser,
+            sigma_min=self.sigma_min,
+            sigma_max=self.sigma_max,
+            schedule_power=self.power,
+            intervals=settings.integration_intervals,
+            probes=probes,
+            progress_every=settings.progress_every,
+        )
+        runtime_seconds = time.time() - started
+        terminal_log_prior = gaussian_log_probability(terminal, self.sigma_max)
+        log_likelihood = terminal_log_prior + correction
+        dimension = terminal.numel()
+
+        result = {
+            "method": "rfd3_probability_flow_ode_hutchinson_v1",
+            "interpretation": "approximate conditional coordinate log likelihood",
+            "input_path": str(input_path),
+            "input_sha256": sha256_file(input_path),
+            "config_path": str(self.config_path),
+            "checkpoint_path": str(self.checkpoint_path),
+            "checkpoint_sha256": self.checkpoint_sha256,
+            "specification": self.specification,
+            "likelihood_settings": asdict(settings),
+            "resolved_schedule": {
+                "sigma_data": self.sigma_data,
+                "sigma_min": self.sigma_min,
+                "sigma_max": self.sigma_max,
+                "schedule_power": self.power,
+            },
+            "state": input_metadata,
+            "terminal_log_prior": terminal_log_prior,
+            "log_density_correction": correction,
+            "estimated_log_likelihood": log_likelihood,
+            "estimated_negative_log_likelihood": -log_likelihood,
+            "log_likelihood_per_active_coordinate": log_likelihood / dimension,
+            "negative_log_likelihood_per_active_coordinate": -log_likelihood
+            / dimension,
+            "terminal_normalized_squared_radius": float(
+                terminal.double().square().sum()
+                / (dimension * self.sigma_max**2)
+            ),
+            "runtime_seconds": runtime_seconds,
+            "warnings": [
+                "This is a learned-flow energy, not a calibrated thermodynamic "
+                "free energy.",
+                "The scalar isotropic EDM interpretation omits RFD3's correlated "
+                "COM training perturbation.",
+                "Hutchinson probes approximate the high-dimensional divergence.",
+                "A finite fixed probe set is not exactly invariant to independently "
+                "rotating an input; keep paired structures in a common frame or "
+                "increase the probe count.",
+                "Cleaned structures reconstruct omitted virtual atom14 slots "
+                "canonically.",
+                "Sparse attention neighbor identities are treated as piecewise "
+                "constant.",
+                "Compare scores only with identical topology, conditioning, "
+                "schedule, checkpoint, and probe seed.",
+            ],
+        }
+
+        temporary_json = json_path.with_suffix(json_path.suffix + ".tmp")
+        temporary_csv = csv_path.with_suffix(csv_path.suffix + ".tmp")
+        temporary_json.write_text(json.dumps(result, indent=2) + "\n")
+        with temporary_csv.open("w", newline="") as handle:
+            writer = csv.DictWriter(handle, fieldnames=list(trace[0]))
+            writer.writeheader()
+            writer.writerows(trace)
+        temporary_json.replace(json_path)
+        temporary_csv.replace(csv_path)
+        return json_path, csv_path
+
+
+def run(args: argparse.Namespace) -> tuple[Path, Path]:
+    """Compatibility wrapper for the original one-input CLI."""
+
+    session = RFD3FlowLikelihoodSession(args.config)
+    return session.score(args.input, args.output_dir, overwrite=args.overwrite)
 
 
 def parse_args() -> argparse.Namespace:
