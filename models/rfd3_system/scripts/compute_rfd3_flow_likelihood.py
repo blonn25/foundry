@@ -236,9 +236,7 @@ def integrate_probability_flow_rk4(
             denoised = denoiser_fn(active, sigma_value)
             return (active - denoised.float()) / sigma_value
 
-        field, divergence = field_and_hutchinson_divergence(
-            sigma_field, x_at_u, probes
-        )
+        field, divergence = field_and_hutchinson_divergence(sigma_field, x_at_u, probes)
         return derivative_value * field, derivative_value * divergence
 
     for step in range(intervals):
@@ -536,9 +534,7 @@ class RFD3FlowLikelihoodSession:
             full = fixed_template.index_copy(
                 1, torch.where(active_mask)[0], active_coordinates
             )
-            sigma_tensor = torch.tensor(
-                [sigma], device=full.device, dtype=full.dtype
-            )
+            sigma_tensor = torch.tensor([sigma], device=full.device, dtype=full.dtype)
             # RFD3 rebuilds its sparse attention graph under no_grad at each call.
             with autocast() if callable(autocast) else nullcontext():
                 output = diffusion_module(
@@ -598,8 +594,7 @@ class RFD3FlowLikelihoodSession:
             "negative_log_likelihood_per_active_coordinate": -log_likelihood
             / dimension,
             "terminal_normalized_squared_radius": float(
-                terminal.double().square().sum()
-                / (dimension * self.sigma_max**2)
+                terminal.double().square().sum() / (dimension * self.sigma_max**2)
             ),
             "runtime_seconds": runtime_seconds,
             "warnings": [
