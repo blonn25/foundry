@@ -58,6 +58,11 @@ class SampleDiffusionConfig:
 class SampleDiffusionWithMotif(SampleDiffusionConfig):
     """Diffusion sampler that supports optional motif alignment."""
 
+    # Optional, instance-local inference instrumentation. This is deliberately
+    # not a checkpoint/config field: callers bind a fresh context for one run.
+    # The ordinary sampler does not change its random calls when this is None.
+    runtime_hooks = None
+
     def _construct_inference_noise_schedule(
         self, device: torch.device, partial_t: float = None
     ) -> torch.Tensor:
@@ -138,7 +143,10 @@ class SampleDiffusionWithMotif(SampleDiffusionConfig):
         coord_atom_lvl_to_be_noised: torch.Tensor,
         is_motif_atom_with_fixed_coord,
     ) -> torch.Tensor:
-        noise = c0 * torch.normal(mean=0.0, std=1.0, size=(D, L, 3), device=c0.device)
+        if self.runtime_hooks is None:
+            noise = c0 * torch.normal(mean=0.0, std=1.0, size=(D, L, 3), device=c0.device)
+        else:
+            noise = c0 * self.runtime_hooks.normal("initial", -1, coord_atom_lvl_to_be_noised)
         noise[..., is_motif_atom_with_fixed_coord, :] = 0  # Zero out noise going in
         X_L = noise + coord_atom_lvl_to_be_noised
         return X_L
@@ -162,6 +170,12 @@ class SampleDiffusionWithMotif(SampleDiffusionConfig):
             device=coord_atom_lvl_to_be_noised.device,
             partial_t=f.get("partial_t", None),
         )
+
+        hooks = self.runtime_hooks
+        if hooks is not None:
+            if self.allow_realignment or self.s_jitter_origin != 0:
+                raise ValueError("Runtime transforms require native realignment and origin jitter off")
+            hooks.begin(noise_schedule, coord_atom_lvl_to_be_noised, f)
 
         L = f["ref_element"].shape[0]
         D = diffusion_batch_size
@@ -197,7 +211,9 @@ class SampleDiffusionWithMotif(SampleDiffusionConfig):
             assert not X_L.requires_grad, "X_L should not require gradients"
 
             # Apply a random rotation and translation to the structure
-            if self.allow_realignment:
+            if hooks is not None:
+                X_L = hooks.augment(step_num, X_L)
+            elif self.allow_realignment:
                 X_L, _ = centre_random_augment_around_motif(
                     X_L,
                     coord_atom_lvl_to_be_noised,
@@ -221,7 +237,10 @@ class SampleDiffusionWithMotif(SampleDiffusionConfig):
             epsilon_L = (
                 self.noise_scale
                 * torch.sqrt(torch.square(t_hat) - torch.square(c_t_minus_1))
-                * torch.normal(mean=0.0, std=1.0, size=X_L.shape, device=X_L.device)
+                * (
+                    torch.normal(mean=0.0, std=1.0, size=X_L.shape, device=X_L.device)
+                    if hooks is None else hooks.normal("churn", step_num, X_L)
+                )
             )
             epsilon_L[..., is_motif_atom_with_fixed_coord, :] = (
                 0  # No noise injection for fixed atoms
@@ -319,6 +338,10 @@ class SampleDiffusionWithMotif(SampleDiffusionConfig):
             # Update the coordinates, scaled by the step size
             X_L = X_noisy_L + step_scale * d_t * delta_L
 
+            if hooks is not None:
+                hooks.observe(step_num, c_t_minus_1, c_t, t_hat, epsilon_L,
+                              X_noisy_L, X_denoised_L, X_L, outs)
+
             # Append the results to the trajectory (for visualization of the diffusion process)
             X_noisy_L_scaled = (
                 self.sigma_data * X_noisy_L / torch.sqrt(t_hat**2 + self.sigma_data**2)
@@ -326,6 +349,12 @@ class SampleDiffusionWithMotif(SampleDiffusionConfig):
             X_noisy_L_traj.append(X_noisy_L_scaled)
             X_denoised_L_traj.append(X_denoised_L)
             t_hats.append(t_hat)
+
+            if hooks is not None and hooks.should_stop(step_num):
+                break
+
+        if hooks is not None:
+            X_L = hooks.finish(X_L)
 
         if torch.any(is_motif_atom_with_fixed_coord) and self.allow_realignment:
             # Insert the gt motif at the end
