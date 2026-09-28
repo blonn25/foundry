@@ -209,8 +209,8 @@ def assert_same_shape(tensor: Tensor, ref_tensor: Tensor) -> None:
 def scatter_mean(zeros: Tensor, dim: int, index: Tensor, source: Tensor) -> Tensor:
     """Scatter-mean aggregation, with an MPS-compatible fallback.
 
-    On non-MPS devices uses index_reduce (faster, in-place kernel).
-    On MPS, index_reduce is not implemented so falls back to scatter_add + count.
+    Normally uses index_reduce. MPS and deterministic execution use scatter_add
+    plus counts: CUDA index_reduce has no deterministic implementation.
 
     Equivalent to: zeros.index_reduce(dim, index, source, 'mean', include_self=False)
 
@@ -223,8 +223,17 @@ def scatter_mean(zeros: Tensor, dim: int, index: Tensor, source: Tensor) -> Tens
     Returns:
         Tensor of same shape as zeros.
     """
-    if zeros.device.type != "mps":
+    deterministic = torch.are_deterministic_algorithms_enabled()
+    if zeros.device.type != "mps" and not deterministic:
         return zeros.index_reduce(dim, index, source, "mean", include_self=False)
+
+    # Low-precision atom-to-token pooling is sensitive to accumulation order.
+    # PyTorch selects deterministic scatter_add kernels when requested; FP32
+    # accumulation also avoids repeated half-precision rounding of the sum.
+    output_dtype = zeros.dtype
+    if deterministic and source.dtype in (torch.float16, torch.bfloat16):
+        zeros = zeros.float()
+        source = source.float()
 
     ndim = source.dim()
     if dim < 0:
@@ -245,7 +254,7 @@ def scatter_mean(zeros: Tensor, dim: int, index: Tensor, source: Tensor) -> Tens
     count = torch.zeros(*zeros.shape[:-1], 1, device=zeros.device, dtype=zeros.dtype)
     count = count.scatter_add(dim, idx_count, ones)  # (..., I, 1)
 
-    return result / count.clamp(min=1)
+    return (result / count.clamp(min=1)).to(output_dtype)
 
 
 def device_of(obj: Any) -> torch.device:
