@@ -102,6 +102,7 @@ def main() -> int:
 
     sources, skipped = _collect_diagnostic_sources(json_paths)
     written = 0
+    failed = 0
     for source in sources:
         try:
             result = _plot_one_source(
@@ -112,6 +113,7 @@ def main() -> int:
                 dpi=args.dpi,
             )
         except Exception as exc:  # noqa: BLE001 - keep batch plotting robust.
+            failed += 1
             skipped += 1
             print(f"SKIP {source.json_path}: {exc}")
             continue
@@ -126,7 +128,7 @@ def main() -> int:
         f"Done. Wrote {written} plot(s) from {len(sources)} batch source(s); "
         f"skipped {skipped} JSON file(s)."
     )
-    return 0
+    return 1 if failed or not written else 0
 
 
 def _iter_json_paths(paths: Iterable[Path], *, recursive: bool) -> Iterable[Path]:

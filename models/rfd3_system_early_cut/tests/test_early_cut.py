@@ -1,6 +1,7 @@
 """Container-native tests: python -m unittest discover -s ... -p test_early_cut.py."""
 
 import json
+from pathlib import Path
 import unittest
 from unittest.mock import patch
 
@@ -11,7 +12,7 @@ from biotite.structure import AtomArray
 from rfd3_system.model.inference_sampler import (
     SampleDiffusionWithSuperDiffSharedChainProxy as OriginalSampler,
 )
-from rfd3_system_early_cut.engine import _to_jsonable
+from rfd3_system_early_cut.engine import RFD3InferenceConfig, RFD3InferenceEngine, _to_jsonable
 from rfd3_system_early_cut.model.inference_sampler import (
     ConditionalDiffusionSampler,
     SampleDiffusionWithSuperDiffSharedChainProxy as EarlyCutSampler,
@@ -68,6 +69,35 @@ def run(sampler_class=NewSampler, *, partial=None, identical=False, **settings):
 
 
 class EarlyCutTests(unittest.TestCase):
+    def test_public_config_and_checkpoint_namespace(self):
+        from hydra import compose, initialize_config_dir
+        from omegaconf import OmegaConf
+
+        configs = Path(__file__).resolve().parents[1] / "configs"
+        with initialize_config_dir(config_dir=str(configs), version_base="1.3"):
+            cfg = compose(config_name="inference", overrides=[
+                "inputs=null", "out_dir=/project/outputs/unused_config_test",
+                "coupling_mode=superdiff_shared_chain",
+                "inference_sampler.kind=superdiff_shared_chain",
+                "inference_sampler.coupling_cut_fraction=0.5",
+            ])
+        params = {k: v for k, v in OmegaConf.to_container(cfg, resolve=True).items()
+                  if k not in {"_target_", "inputs", "out_dir", "n_batches"}}
+        config = RFD3InferenceConfig(**params)
+        self.assertEqual(config.merged_output_policy, "none")
+        self.assertEqual(config.inference_sampler["coupling_cut_fraction"], 0.5)
+        sampler = ConditionalDiffusionSampler(**config.inference_sampler).sampler
+        self.assertEqual(sampler.coupling_cut_fraction, 0.5)
+        engine = RFD3InferenceEngine.__new__(RFD3InferenceEngine)
+        checkpoint = OmegaConf.create({"_target_": "rfd3.model.RFD3.RFD3", "children": [
+            {"_target_": "rfd3.model.inference_sampler.ConditionalDiffusionSampler"},
+            {"_target_": "foundry.common.Unchanged"},
+        ]})
+        engine._rewrite_rfd3_targets_to_system(checkpoint)
+        self.assertEqual(checkpoint._target_, "rfd3_system_early_cut.model.RFD3.RFD3")
+        self.assertTrue(checkpoint.children[0]._target_.startswith("rfd3_system_early_cut."))
+        self.assertEqual(checkpoint.children[1]._target_, "foundry.common.Unchanged")
+
     def assert_same_tracks(self, one, two):
         for key in ("track_1", "track_2"):
             self.assertTrue(torch.equal(one[key]["X_L"], two[key]["X_L"]))
