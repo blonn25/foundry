@@ -1,0 +1,96 @@
+data_structure
+#
+loop_
+_atom_site.group_PDB 
+_atom_site.type_symbol 
+_atom_site.label_atom_id 
+_atom_site.label_alt_id 
+_atom_site.label_comp_id 
+_atom_site.label_asym_id 
+_atom_site.label_entity_id 
+_atom_site.label_seq_id 
+_atom_site.pdbx_PDB_ins_code 
+_atom_site.auth_seq_id 
+_atom_site.auth_comp_id 
+_atom_site.auth_asym_id 
+_atom_site.auth_atom_id 
+_atom_site.Cartn_x 
+_atom_site.Cartn_y 
+_atom_site.Cartn_z 
+_atom_site.pdbx_PDB_model_num 
+_atom_site.id 
+HETATM O O1  . b:u L 2 1   . 1   b:u L O1  -1.983  -2.427  0.928   1 1247
+HETATM C C1  . b:u L 2 1   . 1   b:u L C1  -0.804  -2.304  1.229   1 1248
+HETATM O O2  . b:u L 2 1   . 1   b:u L O2  -0.248  -2.438  2.498   1 1249
+HETATM C C2  . b:u L 2 1   . 1   b:u L C2  -1.164  -2.745  3.507   1 1250
+HETATM C C11 . b:u L 2 1   . 1   b:u L C11 -1.365  -1.806  4.511   1 1251
+HETATM C C9  . b:u L 2 1   . 1   b:u L C9  -2.241  -2.121  5.549   1 1252
+HETATM C C5  . b:u L 2 1   . 1   b:u L C5  -2.91   -3.347  5.618   1 1253
+HETATM C C4  . b:u L 2 1   . 1   b:u L C4  -2.671  -4.282  4.601   1 1254
+HETATM C C3  . b:u L 2 1   . 1   b:u L C3  -1.793  -3.988  3.551   1 1255
+HETATM C C6  . b:u L 2 1   . 1   b:u L C6  -3.82   -3.591  6.746   1 1256
+HETATM C C7  . b:u L 2 1   . 1   b:u L C7  -3.966  -2.627  7.667   1 1257
+HETATM C C8  . b:u L 2 1   . 1   b:u L C8  -3.263  -1.336  7.61    1 1258
+HETATM O O4  . b:u L 2 1   . 1   b:u L O4  -3.432  -0.493  8.484   1 1259
+HETATM O O3  . b:u L 2 1   . 1   b:u L O3  -2.416  -1.131  6.536   1 1260
+HETATM C C12 . b:u L 2 1   . 1   b:u L C12 -4.562  -4.891  6.851   1 1261
+HETATM C C10 . b:u L 2 1   . 1   b:u L C10 0.286   -1.95   0.248   1 1262
+HETATM C C13 . b:u L 2 1   . 1   b:u L C13 0.608   -0.464  0.314   1 1263
+HETATM C C14 . b:u L 2 1   . 1   b:u L C14 1.681   -0.081  -0.692  1 1264
+#
+loop_
+_chem_comp_bond.comp_id 
+_chem_comp_bond.atom_id_1 
+_chem_comp_bond.atom_id_2 
+_chem_comp_bond.value_order 
+_chem_comp_bond.pdbx_aromatic_flag 
+b:u C1  O1  DOUB N
+b:u C1  O2  SING N
+b:u O2  C2  SING N
+b:u C2  C11 DOUB Y
+b:u C3  C2  SING Y
+b:u C3  C4  DOUB Y
+b:u C4  C5  SING Y
+b:u C5  C9  DOUB Y
+b:u C5  C6  SING Y
+b:u C6  C7  DOUB Y
+b:u C7  C8  SING Y
+b:u C8  O4  DOUB N
+b:u C9  O3  SING Y
+b:u C10 C1  SING N
+b:u O3  C8  SING Y
+b:u C11 C9  SING Y
+b:u C12 C6  SING N
+b:u C10 C13 SING N
+b:u C13 C14 SING N
+#
+loop_
+_chem_comp_atom.comp_id 
+_chem_comp_atom.atom_id 
+_chem_comp_atom.type_symbol 
+_chem_comp_atom.charge 
+_chem_comp_atom.model_Cartn_x 
+_chem_comp_atom.pdbx_model_Cartn_x_ideal 
+_chem_comp_atom.model_Cartn_y 
+_chem_comp_atom.pdbx_model_Cartn_y_ideal 
+_chem_comp_atom.model_Cartn_z 
+_chem_comp_atom.pdbx_model_Cartn_z_ideal 
+b:u O1  O 0 -1.9832 -1.9832 -2.4269 -2.4269 0.9279  0.9279
+b:u C1  C 0 -0.8035 -0.8035 -2.3035 -2.3035 1.2295  1.2295
+b:u O2  O 0 -0.2477 -0.2477 -2.4383 -2.4383 2.4979  2.4979
+b:u C2  C 0 -1.164  -1.164  -2.7451 -2.7451 3.5075  3.5075
+b:u C11 C 0 -1.3646 -1.3646 -1.8063 -1.8063 4.5113  4.5113
+b:u C9  C 0 -2.2408 -2.2408 -2.1207 -2.1207 5.5493  5.5493
+b:u C5  C 0 -2.91   -2.91   -3.3475 -3.3475 5.6183  5.6183
+b:u C4  C 0 -2.6705 -2.6705 -4.2825 -4.2825 4.6009  4.6009
+b:u C3  C 0 -1.7932 -1.7932 -3.9882 -3.9882 3.5507  3.5507
+b:u C6  C 0 -3.8197 -3.8197 -3.5915 -3.5915 6.7464  6.7464
+b:u C7  C 0 -3.966  -3.966  -2.6268 -2.6268 7.6666  7.6666
+b:u C8  C 0 -3.2634 -3.2634 -1.3358 -1.3358 7.6103  7.6103
+b:u O4  O 0 -3.4319 -3.4319 -0.4934 -0.4934 8.4845  8.4845
+b:u O3  O 0 -2.4159 -2.4159 -1.1311 -1.1311 6.5363  6.5363
+b:u C12 C 0 -4.5618 -4.5618 -4.891  -4.891  6.8514  6.8514
+b:u C10 C 0 0.2859  0.2859  -1.9505 -1.9505 0.248   0.248
+b:u C13 C 0 0.6084  0.6084  -0.4637 -0.4637 0.3144  0.3144
+b:u C14 C 0 1.6807  1.6807  -0.0808 -0.0808 -0.6919 -0.6919
+#

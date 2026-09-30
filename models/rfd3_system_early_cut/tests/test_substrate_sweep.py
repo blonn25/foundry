@@ -65,6 +65,17 @@ class SubstrateSweepTests(unittest.TestCase):
                    return_value=np.array(['c']*30)):
             self.assertIsNone(topology(helix, helix)['structured_agreement'])
 
+    def test_summary_preserves_missing_values_and_valid_counts(self):
+        from rfd3_system_early_cut.experiments.substrate_analysis import stats
+        self.assertEqual(stats([None, None]), {'n': 0, 'mean': None, 'sd': None})
+        self.assertEqual(stats([None, 1]), {'n': 1, 'mean': 1., 'sd': None})
+        observed = stats([1., None, 3.])
+        self.assertEqual(observed['n'], 2)
+        self.assertEqual(observed['mean'], 2.)
+        self.assertAlmostEqual(observed['sd'], 2**.5)
+        with self.assertRaises(ValueError):
+            stats([float('nan')])
+
     def test_exact_manifest_size_and_endpoints(self):
         path = Path(__file__).resolve().parents[1] / 'experiments/substrate_sweep/config.json'
         config = json.loads(path.read_text())

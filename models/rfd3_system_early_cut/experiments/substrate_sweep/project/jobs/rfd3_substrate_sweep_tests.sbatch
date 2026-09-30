@@ -5,7 +5,7 @@
 #SBATCH --partition=cpu
 #SBATCH --ntasks=1
 #SBATCH --cpus-per-task=2
-#SBATCH --mem=8G
+#SBATCH --mem=12G
 #SBATCH --time=00:15:00
 set -euo pipefail
 cd /mnt/scratch/group/CX500059_DS1/blonnquist/protein_system_design

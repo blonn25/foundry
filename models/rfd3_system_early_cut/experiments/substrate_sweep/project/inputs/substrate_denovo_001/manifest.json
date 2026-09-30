@@ -1,0 +1,62 @@
+{
+  "source_directory": "inputs/serine_hydrolase_partial_diffusion/prepared",
+  "ligands": {
+    "butyrate": {
+      "resname": "b:u",
+      "heavy_atoms": 18,
+      "formula": "C14H14O4",
+      "smiles": "CCCC(=O)Oc1ccc2c(C)cc(=O)oc2c1",
+      "atom_names": [
+        "O1",
+        "C1",
+        "O2",
+        "C2",
+        "C11",
+        "C9",
+        "C5",
+        "C4",
+        "C3",
+        "C6",
+        "C7",
+        "C8",
+        "O4",
+        "O3",
+        "C12",
+        "C10",
+        "C13",
+        "C14"
+      ],
+      "source_cif_sha256": "07fba91fb6d3e4a23dd525cc9f69af6e3e8afd311b8b3ecbb9fd3a97b72b3f93",
+      "cif_sha256": "89ff18775a6d986d6294446a9f0bc54fbf0484a61625ea239df157f401e3ab2b",
+      "sdf_sha256": "5dad323ff4552f12bd91c32f4854d2bc3a096b03b7bde708d533fd6a447d1b29"
+    },
+    "acetate": {
+      "resname": "a:c",
+      "heavy_atoms": 16,
+      "formula": "C12H10O4",
+      "smiles": "CC(=O)Oc1ccc2c(C)cc(=O)oc2c1",
+      "atom_names": [
+        "O1",
+        "C1",
+        "O2",
+        "C2",
+        "C11",
+        "C9",
+        "C5",
+        "C4",
+        "C3",
+        "C6",
+        "C7",
+        "C8",
+        "O4",
+        "O3",
+        "C12",
+        "C10"
+      ],
+      "source_cif_sha256": "87885ddc8620f6b8f2e98ef75dd310ff76fa8c6d167aa28c638291a8a5583f22",
+      "cif_sha256": "4ebc38d6b42f7b41f9da7b141f43da53e0671a116041c324a630a65c3f37f365",
+      "sdf_sha256": "0b4fac5f6f632cdaea220ad230d43ab27070dcdadd58478f131285d11f48a65b"
+    }
+  },
+  "preparation": "Removed all protein ATOM records; retained ligand coordinates and custom chemical-component tables verbatim."
+}
