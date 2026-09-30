@@ -100,3 +100,43 @@ CA RMSDs with and without alignment, final geometry flags, CA-based secondary
 structure and contact-map comparisons, and eight dense/sparse PNG/PDF figure
 pairs. No structures are selected out for poor geometry. Scientific results
 belong under `outputs/foundry/rfd3_system_early_cut/substrate_sweep_001/`.
+
+Analysis validation job `2075927` passed all seven experiment tests, including
+CIF/fixed-pose validation and missing-denominator statistics, and rendered all
+eight PNG/PDF figure pairs from explicitly synthetic fixtures. Together with
+the original nine tests, this covers 16 distinct unit tests. The synthetic
+figures are test artifacts, not experimental results. Job `2075858` failed on
+a test-fixture array type; that fixture was corrected, and its logs are retained.
+Successful validation logs are synced to Wynton.
+
+The following SLURM chain was submitted on September 30, 2026. At submission
+the pilot was pending compatible GPU resources; no sweep structures or
+scientific plots had been generated. The scheduler estimated 05:42 Pacific,
+which may change.
+
+| Stage | Job | Success dependency |
+| --- | --- | --- |
+| Seed 101, all 21 conditions | `2074201` | CPU preflight already passed |
+| Pilot metrics and figures | `2076315` | Pilot generation |
+| Seeds 102–110, 21 conditions each | `2076316` | Pilot generation **and analysis** |
+| Full metrics and figures | `2076317` | Remaining seeds and pilot analysis |
+
+Launch details are retained in `logs/rfd3_substrate_sweep_submission_2074201.txt`.
+The reusable submitter uses native SLURM dependencies, with no polling controller.
+Any failed upstream job invalidates its dependent stages; failed attempts remain
+available for diagnosis. Final results will be in `analysis_2076317/` within the
+sweep root. Pilot plots in `analysis_2076315/` have only one seed and must not be
+interpreted as ten-replicate averages.
+
+When jobs complete successfully, sync their outputs and logs:
+
+```bash
+scripts/sync_corehpc_job_outputs.sh --output-subdir foundry/rfd3_system_early_cut \
+  2074201 2076315 2076316 2076317
+rsync -a chpc-login:/mnt/scratch/group/CX500059_DS1/blonnquist/protein_system_design/outputs/foundry/rfd3_system_early_cut/substrate_sweep_001/manifest.json \
+  outputs/foundry/rfd3_system_early_cut/substrate_sweep_001/
+rsync -a chpc-login:/mnt/scratch/group/CX500059_DS1/blonnquist/protein_system_design/outputs/foundry/rfd3_system_early_cut/substrate_sweep_001/manifest.csv \
+  outputs/foundry/rfd3_system_early_cut/substrate_sweep_001/
+rsync -a chpc-login:/mnt/scratch/group/CX500059_DS1/blonnquist/protein_system_design/outputs/foundry/rfd3_system_early_cut/substrate_sweep_001/resolved_config.json \
+  outputs/foundry/rfd3_system_early_cut/substrate_sweep_001/
+```

@@ -109,3 +109,17 @@ Native sequences are retained per track and are not enforced to match.
 After successful jobs, use the project sync helper with
 `--output-subdir foundry/rfd3_system_early_cut JOBID`; also copy the root-level
 resolved manifest/configuration, whose names intentionally contain no job ID.
+
+## Submission and validation record
+
+CPU preflight 2073953 passed nine original tests, five initial experiment tests,
+and both ligand feature pipelines. Analysis check 2075927 passed seven expanded
+experiment tests and all eight PNG/PDF plotting paths, using synthetic fixtures.
+A preceding fixture-type failure (2075858) was corrected; no generation code was
+changed by that correction. There are 16 unique unit tests in total.
+
+The September 30, 2026 submission is pilot 2074201 → pilot analysis 2076315 →
+remaining-seed array 2076316 → full analysis 2076317. At submission the pilot
+was queued for a compatible GPU; these IDs do not imply completed science.
+See `project/docs/rfd3_system_early_cut.md` for the stage-specific sync commands.
+The original `models/rfd3_system/` has no changes from the pre-experiment baseline.
