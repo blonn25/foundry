@@ -178,6 +178,8 @@ def run_seed(project, root, seed, attempt):
             require(matched == baseline, "Protein noise changed across release conditions")
             for output in outputs:
                 require(np.isfinite(output.atom_array.coord).all(), "Nonfinite final structure")
+                output.metadata["seed"] = seed
+                output.metadata["inference_sampler"] = dict(config["sampler"], coupling_cut_fraction=percent/100)
                 output.dump(pair_dir)
             recorder.save(pair_dir)
             write_json(pair_dir / "pair.json", dict(seed=seed, coupled_fraction=percent/100,
