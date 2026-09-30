@@ -1,0 +1,647 @@
+# Shared-Chain Coupling Math Notes
+
+These notes summarize the approximate math used by the `rfd3_system_early_cut`
+shared-chain A+B/A+C prototype. The implementation is intentionally described
+as an approximation, not exact SuperDiff density control.
+
+## Objects in the Coupled Run
+
+The current prototype runs two RFdiffusion3 denoising tracks:
+
+- track 1: shared chain A with partner context B;
+- track 2: shared chain A with partner context C.
+
+Chain A is represented by one shared coordinate state. At each denoising step,
+the same noisy A coordinates are presented to both tracks. The partner chains
+B and C remain separate and receive their own ordinary RFD3 updates.
+
+For the shared chain A:
+
+```text
+delta_A_1 = update proxy from the A+B track
+delta_A_2 = update proxy from the A+C track
+```
+
+The prototype chooses a scalar mixing weight `kappa` per diffusion sample and
+per denoising step, then constructs:
+
+```text
+delta_A_mix = kappa * delta_A_1 + (1 - kappa) * delta_A_2
+```
+
+This mixed update is applied to chain A in both tracks.
+
+## Denoiser Prediction and Score Interpretation
+
+In generic EDM notation:
+
+```text
+x            = current noisy state
+sigma        = current noise level
+D(x, sigma)  = denoiser prediction of the clean state
+```
+
+`D(x, sigma)` can be interpreted as the denoising network's estimate of the
+clean structure given the current noisy structure:
+
+```text
+D(x, sigma) ~= E[x0 | x at noise level sigma]
+```
+
+For Gaussian denoising models, a Tweedie-style relation connects the denoiser
+prediction to the score:
+
+```text
+score(x, sigma) ~= (D(x, sigma) - x) / sigma^2
+```
+
+RFD3 exposes an EDM-style denoiser prediction in the sampler. In the code, the
+analogous objects are:
+
+```text
+x              -> X_noisy_L
+D(x, sigma)    -> X_denoised_L
+sigma          -> t_hat
+```
+
+RFD3 computes the denoiser-derived update proxy:
+
+```text
+delta = (X_noisy_L - X_denoised_L) / t_hat
+```
+
+If `t_hat` is identified with the EDM noise level `sigma`, then:
+
+```text
+delta = (x - D(x, sigma)) / sigma
+      ~= -sigma * score(x, sigma)
+```
+
+So `delta` is not the exact score. It is a score-like denoising update vector
+with a sign flip and a noise-level scaling. In this prototype, `delta_A_1` and
+`delta_A_2` are compared at the same denoising step and therefore the same
+scheduled `t_hat`, which makes them locally comparable as track-specific update
+pressures on shared chain A.
+
+## Relation Between `sigma` and `t_hat`
+
+`sigma` is the generic EDM/math notation for the noise level. `t_hat` is the
+RFD3 implementation's scheduled noise value. RFD3 constructs `t_hat` from an
+EDM/Karras-style noise schedule:
+
+```text
+t_hat = sigma_data * (s_max^(1/p) + t * (s_min^(1/p) - s_max^(1/p)))^p
+```
+
+For interpreting this implementation:
+
+```text
+sigma ~= t_hat
+```
+
+This does not make the prototype exact SuperDiff. It only explains why RFD3's
+denoiser-derived `delta` is directly related to an EDM score-like direction.
+
+## Full RFD3 Denoising Step
+
+An RFD3 sampler step is not simply:
+
+```text
+x_next = x + delta
+```
+
+It has a stochastic noise-injection stage followed by a denoiser prediction and
+an Euler-like update. Let:
+
+```text
+X_L        = current coordinate state
+c_prev     = current noise schedule value
+c_next     = next lower noise schedule value
+gamma      = gamma_0 if c_next > gamma_min else 0
+t_hat      = c_prev * (1 + gamma)
+step_scale = RFD3 sampler step scale
+```
+
+RFD3 first optionally increases the noise level from `c_prev` to `t_hat`:
+
+```text
+t_hat = c_prev * (1 + gamma)
+```
+
+It then samples Gaussian noise at the matching variance increment:
+
+```text
+epsilon =
+    noise_scale * sqrt(t_hat^2 - c_prev^2) * N(0, I)
+```
+
+and forms the denoiser query:
+
+```text
+X_noisy = X_L + epsilon
+```
+
+Fixed motif atoms have their noise set to zero. The denoiser predicts:
+
+```text
+X_denoised = D(X_noisy, t_hat)
+```
+
+RFD3 then computes:
+
+```text
+delta = (X_noisy - X_denoised) / t_hat
+d_t   = c_next - t_hat
+```
+
+and updates coordinates with:
+
+```text
+X_next = X_noisy + step_scale * d_t * delta
+```
+
+Since `c_next < t_hat` during normal denoising, `d_t` is negative. This can
+also be read as moving from the noisy query point back toward the denoiser
+prediction:
+
+```text
+X_next =
+    X_noisy
+  + step_scale * (t_hat - c_next) / t_hat * (X_denoised - X_noisy)
+```
+
+Thus each step is:
+
+```text
+current coordinates -> stochastic noisy query -> denoiser prediction -> update toward denoised prediction
+```
+
+## Coupled Shared-Chain Noise Handling
+
+In `rfd3_system_early_cut`, the shared chain A is presented to both tracks with the same
+instantaneous noisy coordinates. The implementation first makes track 2's
+shared A coordinates match track 1:
+
+```text
+X2_L[A] = X1_L[A]
+```
+
+It then samples independent partner noise for the full track tensors, but
+replaces the shared-chain noise in both tracks with the same Gaussian sample:
+
+```text
+epsilon_shared =
+    noise_scale * sqrt(t_hat^2 - c_prev^2) * N(0, I)
+
+epsilon_1[A] = epsilon_shared
+epsilon_2[A] = epsilon_shared
+```
+
+Fixed shared atoms have their shared noise set to zero, and fixed atoms in each
+track also have their noise set to zero. After this assignment:
+
+```text
+X1_noisy[A] = X1_L[A] + epsilon_shared
+X2_noisy[A] = X2_L[A] + epsilon_shared
+```
+
+Because `X2_L[A]` was overwritten with `X1_L[A]` first, the shared-chain noisy
+states are identical before denoising:
+
+```text
+X1_noisy[A] = X2_noisy[A]
+```
+
+The partner-chain noise remains condition-specific:
+
+```text
+epsilon_1[B] is independent
+epsilon_2[C] is independent
+```
+
+This is intentional. It means the two denoiser calls evaluate the same noisy
+state of A under two different contexts, rather than two unrelated noisy
+realizations of A.
+
+## Would Dividing by `t_hat` Make `delta` More Score-Like?
+
+A score-like proxy could be formed as:
+
+```text
+score_proxy = -delta / t_hat
+            = (X_denoised_L - X_noisy_L) / t_hat^2
+```
+
+This is closer to the generic EDM score expression. However, for the current
+two-track same-timestep kappa solve, replacing both track updates by the same
+shared scalar multiple mostly leaves `kappa_raw` unchanged.
+
+If:
+
+```text
+delta_A_1' = c * delta_A_1
+delta_A_2' = c * delta_A_2
+```
+
+then with `proxy_norm_weight = 1`, the numerator and denominator in the kappa
+solve both scale by `c^2`, so the unconstrained `kappa_raw` is unchanged. The
+sign flip also cancels because both tracks are transformed identically.
+
+Using a score-scaled proxy may still change:
+
+- diagnostic magnitudes such as norms and residuals;
+- behavior if future thresholds use absolute delta/residual sizes;
+- behavior if `proxy_norm_weight` changes;
+- behavior if tracks ever use different effective noise scales or masks.
+
+For this reason, the current implementation keeps the RFD3 sampler-native
+`delta` as the coupling proxy and documents it as approximate.
+
+## Proxy Equalization Quantity
+
+The prototype does not compute exact SuperDiff density changes. Instead, it
+defines a scalar proxy value for each track:
+
+```text
+proxy_i(delta_mix) = <delta_mix, delta_i> - w * ||delta_i||^2
+```
+
+where:
+
+- `delta_i` is the shared-chain update proxy from track `i`;
+- `delta_mix` is the proposed mixed shared-chain update;
+- `<., .>` is the sum of coordinate-wise products over the atoms selected for
+  the kappa solve;
+- `||.||^2` is the corresponding squared norm;
+- `w = proxy_norm_weight`, currently `1.0`.
+
+The vector `delta_i` is the score-like denoising update proxy. The scalar
+`proxy_i(delta_mix)` is the quantity that is equalized between tracks.
+
+The default kappa atom subset is `ALL`, which uses every non-fixed shared-chain
+atom and preserves the original prototype behavior. The optional
+`inference_sampler.kappa_atom_subset=BKBN` and `CA` modes solve `kappa` using
+only backbone atoms (`N`, `CA`, `C`, `O`) or only `CA` atoms, respectively.
+These modes change the proxy equation and diagnostics only; the resulting
+scalar `kappa` is still applied to the full non-fixed shared-chain update.
+
+## Kappa Solve
+
+Let:
+
+```text
+delta_1 = track 1 shared-chain update proxy
+delta_2 = track 2 shared-chain update proxy
+Delta   = delta_1 - delta_2
+delta_mix = kappa * delta_1 + (1 - kappa) * delta_2
+w = proxy_norm_weight
+```
+
+First rewrite the mixed update:
+
+```text
+delta_mix = delta_2 + kappa * (delta_1 - delta_2)
+delta_mix = delta_2 + kappa * Delta
+```
+
+The proxy equalization condition is:
+
+```text
+proxy_1(delta_mix) = proxy_2(delta_mix)
+```
+
+Substitute the proxy definitions:
+
+```text
+<delta_mix, delta_1> - w ||delta_1||^2
+    =
+<delta_mix, delta_2> - w ||delta_2||^2
+```
+
+Move terms:
+
+```text
+<delta_mix, delta_1> - <delta_mix, delta_2>
+    =
+w ||delta_1||^2 - w ||delta_2||^2
+```
+
+Factor the inner product:
+
+```text
+<delta_mix, delta_1 - delta_2>
+    =
+w (||delta_1||^2 - ||delta_2||^2)
+```
+
+Use `Delta = delta_1 - delta_2`:
+
+```text
+<delta_mix, Delta>
+    =
+w (||delta_1||^2 - ||delta_2||^2)
+```
+
+Substitute `delta_mix = delta_2 + kappa * Delta`:
+
+```text
+<delta_2 + kappa * Delta, Delta>
+    =
+w (||delta_1||^2 - ||delta_2||^2)
+```
+
+Distribute:
+
+```text
+<delta_2, Delta> + kappa * <Delta, Delta>
+    =
+w (||delta_1||^2 - ||delta_2||^2)
+```
+
+Since `<Delta, Delta> = ||Delta||^2`:
+
+```text
+<delta_2, Delta> + kappa * ||Delta||^2
+    =
+w (||delta_1||^2 - ||delta_2||^2)
+```
+
+Solve for `kappa`:
+
+```text
+kappa * ||Delta||^2
+    =
+w (||delta_1||^2 - ||delta_2||^2) - <delta_2, Delta>
+```
+
+Therefore:
+
+```text
+kappa_raw =
+    [w (||delta_1||^2 - ||delta_2||^2) - <delta_2, delta_1 - delta_2>]
+    /
+    ||delta_1 - delta_2||^2
+```
+
+When `w = 0.5`, the numerator is algebraically
+`0.5 * ||delta_1 - delta_2||^2`, so every nondegenerate solve gives
+`kappa_raw = 0.5`; the degenerate fallback is also `0.5`. The implementation
+returns this identity directly for `w = 0.5`. This avoids bfloat16 subtractive
+cancellation between independently accumulated numerator and denominator
+reductions and makes `w = 0.5` an exact equal-mixing control.
+
+### Scale-aware regularization
+
+The raw solve becomes ill-conditioned when the two track updates are nearly
+identical. Its denominator decreases quadratically with
+`delta_1 - delta_2`, while its numerator can decrease only linearly. The
+resulting `kappa_raw` can therefore become very large even when changing kappa
+has little effect on the mixed update.
+
+Define a symmetric update-magnitude scale:
+
+```text
+S = 0.5 * (||delta_1||^2 + ||delta_2||^2)
+rho = proxy_kappa_regularization_rho
+```
+
+The regularized denominator and reliability are:
+
+```text
+regularized_denominator = ||Delta||^2 + rho * S
+
+reliability =
+    ||Delta||^2
+    /
+    (||Delta||^2 + rho * S)
+```
+
+The pre-clamp regularized weight is:
+
+```text
+kappa_regularized =
+    0.5 + reliability * (kappa_raw - 0.5)
+```
+
+Substituting the raw numerator gives the equivalent expression:
+
+```text
+N = w (||delta_1||^2 - ||delta_2||^2) - <delta_2, Delta>
+D = ||Delta||^2
+
+kappa_regularized =
+    0.5 + (N - 0.5 * D) / (D + rho * S)
+```
+
+For the default `w=1`, let:
+
+```text
+delta_mean = 0.5 * (delta_1 + delta_2)
+```
+
+Then:
+
+```text
+kappa_regularized =
+    0.5
+    + <delta_mean, Delta>
+      /
+      (||Delta||^2 + rho * S)
+```
+
+This behavior has three useful limits:
+
+- `rho=0` exactly reproduces the legacy raw solve;
+- if `||Delta||^2` is much larger than `rho*S`, reliability approaches `1`
+  and regularization has little effect;
+- if `||Delta||^2` is much smaller than `rho*S`, reliability approaches `0`
+  and kappa smoothly approaches equal weighting.
+
+Nonzero rho intentionally relaxes exact proxy equalization in exchange for a
+better-conditioned update. It is dimensionless because it multiplies `S`,
+which has the same units and atom-count scaling as the original denominator.
+
+The implementation retains the literal degeneracy guard and applies the
+existing clamp after regularization:
+
+```text
+if ||delta_1 - delta_2||^2 <= eps:
+    kappa_raw = 0.5
+    kappa_regularized = 0.5
+
+kappa = clamp(kappa_regularized, kappa_min, kappa_max)
+```
+
+Current defaults:
+
+```text
+eps = 1e-8
+kappa_min = -1.0
+kappa_max = 2.0
+proxy_norm_weight = 1.0
+proxy_kappa_regularization_rho = 0.0
+```
+
+The clamped range allows extrapolation beyond a convex average. For example:
+
+- `kappa = 1` uses the track 1 update only;
+- `kappa = 0` uses the track 2 update only;
+- `kappa = 0.5` is an equal mix;
+- `kappa > 1` extrapolates past track 1 away from track 2;
+- `kappa < 0` extrapolates past track 2 away from track 1.
+
+## Coordinate Update
+
+After solving for `kappa`, the shared-chain update is:
+
+```text
+kappa = solve_proxy(delta_A_1_subset, delta_A_2_subset)
+delta_A_mix_all = kappa * delta_A_1_all + (1 - kappa) * delta_A_2_all
+```
+
+RFD3's sampler then applies:
+
+```text
+A_next_all = A_noisy_all + step_scale * d_t * delta_A_mix_all
+```
+
+The non-shared partner chains are updated normally by their own tracks:
+
+```text
+X1_next = X1_noisy + step_scale * d_t * delta_1
+X2_next = X2_noisy + step_scale * d_t * delta_2
+```
+
+Then the shared chain positions in both tracks are overwritten with the same
+`A_next`:
+
+```text
+X1_next[A] = A_next
+X2_next[A] = A_next
+```
+
+## Proxy Residual
+
+Two residual stages are recorded. The regularized residual uses
+`kappa_regularized` before clamping:
+
+```text
+regularized_proxy_residual =
+    proxy_1(delta_mix_regularized) - proxy_2(delta_mix_regularized)
+```
+
+The final proxy residual is computed after the final, clamped `kappa` has been
+chosen:
+
+```text
+proxy_residual = proxy_1(delta_mix) - proxy_2(delta_mix)
+```
+
+Expanded:
+
+```text
+proxy_residual =
+    [<delta_mix, delta_1> - w ||delta_1||^2]
+  - [<delta_mix, delta_2> - w ||delta_2||^2]
+```
+
+A residual close to zero means the implemented proxy equalization equation was
+well satisfied. With nonzero rho, the regularized residual may intentionally
+be nonzero even when no clamp is needed. A large final residual means the proxy
+condition was not well satisfied, commonly because:
+
+- regularization deliberately shrank an ill-conditioned solve toward `0.5`;
+- `kappa_raw` was outside the allowed range and had to be clamped;
+- the denominator `||delta_1 - delta_2||^2` was small;
+- the two update proxies created an ill-conditioned local solve.
+
+If `degenerate = true`, the solve was considered numerically unreliable and
+the implementation falls back to `kappa_raw = 0.5` before clamping.
+
+## Diagnostic Plot Interpretation
+
+Coupled track and merged outputs save per-step diagnostics in their JSON
+metadata. To create plots, run the post-processing script after inference with a
+Python environment that has Matplotlib installed:
+
+```bash
+envs/esm/bin/python \
+  software/foundry/models/rfd3_system_early_cut/scripts/plot_coupling_diagnostics.py \
+  outputs/foundry/rfd3_system_early_cut/<run_dir>
+```
+
+This reads any coupled JSON associated with each diffusion batch and writes
+batch-level diagnostic PNGs:
+
+```text
+*_kappa.png
+*_kappa_stages.png
+*_kappa_reliability.png
+*_kappa_relative_denominator.png
+*_proxy_residual.png
+*_regularized_proxy_residual.png
+```
+
+The kappa plot x-axis uses normalized `t` values. They increase from 0 on the
+left to 1 on the right, matching the direction of the denoising process from
+the noisiest state to the final denoised end. The y-axis is `kappa` in:
+
+```text
+delta_mix = kappa * delta(track 1) + (1 - kappa) * delta(track 2)
+```
+
+Interpretation:
+
+- higher `kappa` means the shared-chain update leans more toward track 1;
+- lower `kappa` means it leans more toward track 2;
+- `kappa = 0.5` is an equal mix;
+- values outside `[0, 1]` are extrapolating rather than interpolating.
+
+The physical RFD3 noise scale `t_hat` is still saved in JSON diagnostics for
+analysis, but it is not used as the kappa plot x-axis.
+
+Track, merged, and repeated `model_N` JSON files from the same diffusion batch
+contain duplicated coupling diagnostics. The plotter collapses those to one
+batch-level kappa PNG and one batch-level proxy-residual PNG, so plotting still
+works when `merged_output_policy=none`. Use `--model-index N` to make a one-off
+plot set for a single generated model.
+
+The proxy-residual PNG uses the same normalized `t` x-axis. Its y-axis is the
+post-clamp residual defined above; values closer to zero indicate that the
+implemented proxy equalization condition was better satisfied at that denoising
+step.
+
+The kappa-stages PNG compares the unregularized solve, the pre-clamp
+regularized value, and the final applied value. The reliability PNG shows the
+fraction of the raw displacement from `0.5` retained at each step. The relative
+denominator PNG plots `||Delta||^2/S` on a logarithmic scale and marks `rho`;
+the marked line corresponds to reliability `0.5`.
+
+The cosine PNGs use the same normalized `t` x-axis and a fixed y-axis of
+`[-1, 1]`. They show how aligned each track-specific shared-chain update is
+with the mixed update:
+
+```text
+cos_1_mix = <delta_A_1, delta_A_mix> / (||delta_A_1|| ||delta_A_mix|| + eps)
+cos_2_mix = <delta_A_2, delta_A_mix> / (||delta_A_2|| ||delta_A_mix|| + eps)
+```
+
+Two cosine diagnostic sets are saved:
+
+- `*_cosine_kappa_subset.png` uses the same atom subset used to solve `kappa`
+  (`ALL`, `BKBN`, or `CA`);
+- `*_cosine_all_shared.png` uses all non-fixed shared-chain atoms that receive
+  the mixed update.
+
+On cosine plots, hue identifies the diffusion-batch sample. The light line for
+that hue is `cos(delta_A_1, delta_A_mix)`, and the dark line for that same hue
+is `cos(delta_A_2, delta_A_mix)`. To keep batch-level plots readable, the
+plotter shows the first three samples by default; pass `--max-cosine-samples N`
+to show more.
+
+## Exactness Caveat
+
+This implementation does not use exact model scores or the SuperDiff Ito
+density estimator. It mixes RFD3 denoiser-derived update proxies at inference
+time. The diagnostics should therefore be interpreted as local, approximate
+coupling diagnostics, not exact density-control quantities.

@@ -1,0 +1,975 @@
+#!/usr/bin/env python3
+"""Fold tied ProteinMPNN or Caliby outputs from rfd3_system_early_cut with ESMFold2.
+
+The tied MPNN input contains two separated complexes in one four-chain file:
+``A+B`` and ``D+C``.  MPNN writes one FASTA record and, optionally, one CIF
+structure per sampled sequence.  This helper folds prefilter-passing sequence
+sets in the eight states used by pipeline v2:
+
+* on-target complexes: ``AB_SEP`` and ``DC_SER``
+* off-target complexes: ``AC_SEP`` and ``DB_SER``
+* monomers: ``A_SEP``, ``D_SER``, ``B``, and ``C``
+"""
+
+from __future__ import annotations
+
+import argparse
+import csv
+import gzip
+import hashlib
+import json
+import os
+import re
+from dataclasses import dataclass
+from pathlib import Path
+from typing import Any, Iterable
+
+from sequence_design_io import (
+    load_sequence_design_manifest,
+    load_sequence_design_records,
+)
+
+
+MODEL_REPOS = {
+    "esmfold2": "biohub/ESMFold2",
+    "esmfold2-fast": "biohub/ESMFold2-Fast",
+}
+ESMC_REPO = "biohub/ESMC-6B"
+SOURCE_RESIDUE_RE = re.compile(r"^(?P<chain>[A-Za-z])(?P<resid>\d+)$")
+MPNN_FASTA_HEADER_RE = re.compile(r"^(?P<name>.+)_b(?P<batch>\d+)_d(?P<design>\d+)$")
+PAE_ATTRIBUTE_CANDIDATES = (
+    "pae",
+    "predicted_aligned_error",
+    "aligned_error",
+    "predicted_tm_aligned_error",
+)
+AA_THREE_TO_ONE = {
+    "ALA": "A",
+    "ARG": "R",
+    "ASN": "N",
+    "ASP": "D",
+    "CYS": "C",
+    "GLN": "Q",
+    "GLU": "E",
+    "GLY": "G",
+    "HIS": "H",
+    "ILE": "I",
+    "LEU": "L",
+    "LYS": "K",
+    "MET": "M",
+    "PHE": "F",
+    "PRO": "P",
+    "SER": "S",
+    "THR": "T",
+    "TRP": "W",
+    "TYR": "Y",
+    "VAL": "V",
+    "MSE": "M",
+}
+
+
+@dataclass(frozen=True)
+class ManifestEntry:
+    mpnn_name: str
+    model_index: int
+    fixed_a_source_residues: list[str]
+    fixed_residues: list[str]
+    chain_order: list[str]
+    chain_lengths: dict[str, int]
+    track1_cif: str
+    track2_cif: str
+
+
+@dataclass(frozen=True)
+class MpnnRecord:
+    design_key: str
+    mpnn_name: str
+    model_index: int
+    batch_index: int
+    design_index: int
+    sequence_recovery: float | None
+    sequence: str
+    chains: dict[str, str]
+    mpnn_cif: str
+
+
+@dataclass(frozen=True)
+class FoldTask:
+    task_id: str
+    complex_kind: str
+    record: MpnnRecord
+    chains: dict[str, str]
+    sep_chain: str | None
+    sep_residue_one_based: int | None
+    sep_position_zero_based: int | None
+
+
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument(
+        "mpnn_output_dir",
+        type=Path,
+        help="Selected sequence-design backend output directory.",
+    )
+    parser.add_argument(
+        "--sequence-design-backend",
+        choices=["proteinmpnn", "caliby"],
+        default="proteinmpnn",
+        help=(
+            "Sequence-design output format. ProteinMPNN remains the CLI default "
+            "for compatibility; adaptive campaign configs select this explicitly."
+        ),
+    )
+    parser.add_argument(
+        "--out-dir", type=Path, required=True, help="ESMFold2 output directory."
+    )
+    parser.add_argument(
+        "--prefilter-summary",
+        type=Path,
+        help="Optional prefilter_summary.csv. Only passing designs are folded unless forced.",
+    )
+    parser.add_argument(
+        "--force-through-prefilter",
+        action="store_true",
+        help="Fold all MPNN records even when the prefilter failed or is absent.",
+    )
+    parser.add_argument("--model", choices=sorted(MODEL_REPOS), default="esmfold2")
+    parser.add_argument(
+        "--sep-source-residue",
+        default="A10",
+        help="Source shared-chain residue converted to SEP in A-containing folds.",
+    )
+    parser.add_argument("--num-loops", type=int, default=None)
+    parser.add_argument("--num-sampling-steps", type=int, default=None)
+    parser.add_argument("--num-diffusion-samples", type=int, default=None)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument(
+        "--derive-task-seeds",
+        action="store_true",
+        help=(
+            "Treat --seed as a base seed and derive a stable seed for each fold task. "
+            "This avoids making task seeds depend on filtering or execution order."
+        ),
+    )
+    parser.add_argument(
+        "--states",
+        default=None,
+        help=(
+            "Optional comma-separated subset of AB_SEP,DC_SER,AC_SEP,DB_SER,"
+            "A_SEP,D_SER,B,C. The default retains the historical all-eight-states behavior."
+        ),
+    )
+    parser.add_argument(
+        "--state-specs-json",
+        type=Path,
+        help=(
+            "Optional JSON list defining arbitrary A/B/C/D chain combinations. "
+            "Each entry requires name and chains; sep_chain may be A or D. "
+            "This is mutually exclusive with --states."
+        ),
+    )
+    parser.add_argument(
+        "--design-keys-json",
+        type=Path,
+        help=(
+            "Optional JSON list, or mapping with a design_keys list, selecting sequence "
+            "design keys to fold."
+        ),
+    )
+    parser.add_argument(
+        "--resume",
+        action="store_true",
+        help="Skip fold tasks that already have a complete task JSON and all referenced CIFs.",
+    )
+    parser.add_argument("--noise-scale", type=float, default=None)
+    parser.add_argument("--step-scale", type=float, default=None)
+    parser.add_argument("--max-inference-sigma", type=float, default=None)
+    parser.add_argument("--lm-mask-pct", type=float, default=None)
+    parser.add_argument("--lm-dropout", type=float, default=None)
+    parser.add_argument("--msa-max-depth", type=int, default=None)
+    parser.add_argument("--msa-column-mask-rate", type=float, default=None)
+    parser.add_argument("--dry-run", action="store_true")
+    return parser.parse_args()
+
+
+def read_json(path: Path) -> dict[str, Any]:
+    with path.open() as handle:
+        return json.load(handle)
+
+
+def write_json(path: Path, payload: dict[str, Any]) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(payload, indent=2, sort_keys=True) + "\n")
+
+
+def parse_source_residue(value: str) -> tuple[str, int]:
+    match = SOURCE_RESIDUE_RE.fullmatch(value)
+    if not match:
+        raise ValueError(f"Invalid source residue {value!r}; expected format like A10.")
+    return match.group("chain"), int(match.group("resid"))
+
+
+def load_manifest(mpnn_output_dir: Path) -> dict[str, ManifestEntry]:
+    manifest = read_json(mpnn_output_dir / "tied_mpnn_manifest.json")
+    entries: dict[str, ManifestEntry] = {}
+    for raw_entry in manifest.get("entries", []):
+        mpnn_name = raw_entry.get("mpnn_name")
+        if not mpnn_name:
+            # Older manifests can be reconstructed from the input naming rule,
+            # but v2 writes mpnn_name explicitly to avoid relying on path stems.
+            raise ValueError("Manifest entry is missing mpnn_name.")
+        entries[mpnn_name] = ManifestEntry(
+            mpnn_name=mpnn_name,
+            model_index=int(raw_entry["model_index"]),
+            fixed_a_source_residues=list(raw_entry["fixed_a_source_residues"]),
+            fixed_residues=list(raw_entry["fixed_residues"]),
+            chain_order=list(raw_entry["chain_order"]),
+            chain_lengths={
+                str(k): int(v) for k, v in raw_entry["chain_lengths"].items()
+            },
+            track1_cif=str(raw_entry["track1_cif"]),
+            track2_cif=str(raw_entry["track2_cif"]),
+        )
+    if not entries:
+        raise ValueError(
+            f"No entries found in {mpnn_output_dir / 'tied_mpnn_manifest.json'}"
+        )
+    return entries
+
+
+def parse_fasta(path: Path) -> list[tuple[str, str, dict[str, str]]]:
+    records: list[tuple[str, str, dict[str, str]]] = []
+    header: str | None = None
+    seq_parts: list[str] = []
+
+    def flush() -> None:
+        nonlocal header, seq_parts
+        if header is None:
+            return
+        fields = [part.strip() for part in header.split(",")]
+        meta: dict[str, str] = {}
+        for field in fields[1:]:
+            if "=" in field:
+                key, value = field.split("=", 1)
+                meta[key.strip()] = value.strip()
+        records.append((fields[0], "".join(seq_parts), meta))
+        header = None
+        seq_parts = []
+
+    with path.open() as handle:
+        for line in handle:
+            line = line.strip()
+            if not line:
+                continue
+            if line.startswith(">"):
+                flush()
+                header = line[1:]
+            else:
+                seq_parts.append(line)
+    flush()
+    return records
+
+
+def split_sequence(sequence: str, entry: ManifestEntry) -> dict[str, str]:
+    chains: dict[str, str] = {}
+    offset = 0
+    for chain_id in entry.chain_order:
+        length = entry.chain_lengths[chain_id]
+        chains[chain_id] = sequence[offset : offset + length]
+        offset += length
+    if offset != len(sequence):
+        raise ValueError(
+            f"Sequence length {len(sequence)} does not match manifest chain lengths "
+            f"{entry.chain_lengths} for {entry.mpnn_name}."
+        )
+    return chains
+
+
+def open_text(path: Path):
+    return gzip.open(path, "rt") if path.name.endswith(".gz") else path.open()
+
+
+def residue_to_one_letter(residue_name: str) -> str:
+    return AA_THREE_TO_ONE.get(residue_name.strip().upper(), "X")
+
+
+def load_chain_sequences_from_structure(path: Path) -> dict[str, str]:
+    """Read chain-specific sequences from a ProteinMPNN output structure.
+
+    ProteinMPNN FASTA records contain one concatenated sequence with no chain
+    delimiters.  Foundry's MPNN writer may reorder chains while writing the
+    output CIF, so the only robust way to recover A/B/C/D sequences is from the
+    chain IDs in the output structure itself.
+    """
+
+    from Bio.PDB import MMCIFParser, PDBParser
+
+    if not path.is_file():
+        raise FileNotFoundError(f"ProteinMPNN output structure not found: {path}")
+    parser = (
+        MMCIFParser(QUIET=True)
+        if path.name.endswith((".cif", ".cif.gz", ".mmcif", ".mmcif.gz"))
+        else PDBParser(QUIET=True)
+    )
+    with open_text(path) as handle:
+        structure = parser.get_structure("mpnn", handle)
+    model = next(structure.get_models())
+    chains: dict[str, str] = {}
+    for chain in model:
+        residues: list[str] = []
+        seen: set[tuple[str, int, str]] = set()
+        for residue in chain:
+            if residue.id[0].strip():
+                continue
+            if "CA" not in residue:
+                continue
+            key = (str(chain.id), int(residue.id[1]), str(residue.id[2]).strip())
+            if key in seen:
+                continue
+            seen.add(key)
+            residues.append(residue_to_one_letter(residue.resname))
+        if residues:
+            chains[str(chain.id)] = "".join(residues)
+    if not chains:
+        raise ValueError(f"No polymer chain sequences found in {path}")
+    return chains
+
+
+def chain_sequences_for_record(
+    *,
+    mpnn_cif: Path,
+    fasta_sequence: str,
+    entry: ManifestEntry,
+) -> dict[str, str]:
+    """Return chain sequences for one MPNN design.
+
+    Prefer the output CIF because it carries explicit chain IDs.  The FASTA
+    fallback supports older runs where structures were not written, but it is
+    less robust for multi-chain tied designs.
+    """
+
+    if mpnn_cif.is_file():
+        chains = load_chain_sequences_from_structure(mpnn_cif)
+        missing = [
+            chain_id for chain_id in entry.chain_lengths if chain_id not in chains
+        ]
+        if missing:
+            raise ValueError(
+                f"{mpnn_cif} is missing expected chain(s): {', '.join(missing)}"
+            )
+        length_mismatches = {
+            chain_id: (len(chains[chain_id]), expected_length)
+            for chain_id, expected_length in entry.chain_lengths.items()
+            if len(chains[chain_id]) != expected_length
+        }
+        if length_mismatches:
+            raise ValueError(
+                f"{mpnn_cif} chain lengths do not match manifest: {length_mismatches}"
+            )
+        return chains
+    return split_sequence(fasta_sequence, entry)
+
+
+def load_mpnn_records(
+    mpnn_output_dir: Path, manifest: dict[str, ManifestEntry]
+) -> list[MpnnRecord]:
+    records: list[MpnnRecord] = []
+    for fasta_path in sorted(mpnn_output_dir.glob("*.fa")):
+        for header_name, sequence, meta in parse_fasta(fasta_path):
+            match = MPNN_FASTA_HEADER_RE.fullmatch(header_name)
+            if not match:
+                raise ValueError(f"Cannot parse MPNN FASTA header: {header_name!r}")
+            mpnn_name = match.group("name")
+            if mpnn_name not in manifest:
+                raise ValueError(f"No tied MPNN manifest entry for {mpnn_name!r}")
+            entry = manifest[mpnn_name]
+            design_key = header_name
+            mpnn_cif = mpnn_output_dir / f"{design_key}.cif"
+            try:
+                sequence_recovery = float(meta["sequence_recovery"])
+            except (KeyError, ValueError):
+                sequence_recovery = None
+            records.append(
+                MpnnRecord(
+                    design_key=design_key,
+                    mpnn_name=mpnn_name,
+                    model_index=entry.model_index,
+                    batch_index=int(match.group("batch")),
+                    design_index=int(match.group("design")),
+                    sequence_recovery=sequence_recovery,
+                    sequence=sequence,
+                    chains=chain_sequences_for_record(
+                        mpnn_cif=mpnn_cif,
+                        fasta_sequence=sequence,
+                        entry=entry,
+                    ),
+                    mpnn_cif=str(mpnn_cif),
+                )
+            )
+    if not records:
+        raise ValueError(f"No MPNN FASTA records found in {mpnn_output_dir}")
+    return sorted(
+        records,
+        key=lambda item: (item.model_index, item.batch_index, item.design_index),
+    )
+
+
+def load_prefilter_pass_set(path: Path | None) -> set[str]:
+    if path is None or not path.is_file():
+        return set()
+    passing: set[str] = set()
+    with path.open(newline="") as handle:
+        for row in csv.DictReader(handle):
+            if row.get("prefilter_pass", "").lower() == "true":
+                passing.add(row["design_key"])
+    return passing
+
+
+def parse_residue_label(value: str) -> tuple[str, int]:
+    return parse_source_residue(value)
+
+
+def fixed_shared_label_pairs(entry: ManifestEntry) -> list[tuple[str, str]]:
+    n_fixed_a = len(entry.fixed_a_source_residues)
+    if len(entry.fixed_residues) < 2 * n_fixed_a:
+        raise ValueError(
+            f"fixed_residues for {entry.mpnn_name} lacks A and D fixed residues."
+        )
+    pairs: list[tuple[str, str]] = []
+    for source_idx in range(n_fixed_a):
+        a_label = entry.fixed_residues[source_idx]
+        d_label = entry.fixed_residues[n_fixed_a + source_idx]
+        a_chain, _ = parse_residue_label(a_label)
+        d_chain, _ = parse_residue_label(d_label)
+        if a_chain != "A" or d_chain != "D":
+            raise ValueError(
+                f"Expected fixed shared residues to map to A/D, got {a_label} and {d_label}."
+            )
+        pairs.append((a_label, d_label))
+    return pairs
+
+
+def mapped_sep_labels(entry: ManifestEntry, source_residue: str) -> tuple[str, str]:
+    if source_residue not in entry.fixed_a_source_residues:
+        raise ValueError(
+            f"{source_residue!r} is absent from fixed_a_source_residues for {entry.mpnn_name}."
+        )
+    return fixed_shared_label_pairs(entry)[
+        entry.fixed_a_source_residues.index(source_residue)
+    ]
+
+
+def replace_sequence_residue(
+    sequence: str, position_one_based: int, residue: str
+) -> str:
+    index = position_one_based - 1
+    return sequence[:index] + residue + sequence[index + 1 :]
+
+
+def validate_shared_sequences(record: MpnnRecord, entry: ManifestEntry) -> None:
+    a = record.chains["A"]
+    d = record.chains["D"]
+    if len(a) != len(d):
+        raise ValueError(f"{record.design_key} has different A/D lengths.")
+    allowed_differences: set[int] = set()
+    for a_label, d_label in fixed_shared_label_pairs(entry):
+        _, a_resid = parse_residue_label(a_label)
+        _, d_resid = parse_residue_label(d_label)
+        if a_resid != d_resid:
+            raise ValueError(
+                f"A/D fixed labels do not share a residue index: {a_label}, {d_label}"
+            )
+        allowed_differences.add(a_resid)
+    unexpected = [
+        idx
+        for idx, (a_res, d_res) in enumerate(zip(a, d), start=1)
+        if a_res != d_res and idx not in allowed_differences
+    ]
+    if unexpected:
+        raise ValueError(
+            f"{record.design_key} has untied A/D differences at {unexpected}."
+        )
+
+
+def build_fold_tasks(
+    records: Iterable[MpnnRecord],
+    manifest: dict[str, ManifestEntry],
+    sep_source_residue: str,
+    states: set[str] | None = None,
+    state_specs: list[dict[str, Any]] | None = None,
+) -> list[FoldTask]:
+    parse_source_residue(sep_source_residue)
+    tasks: list[FoldTask] = []
+    for record in records:
+        entry = manifest[record.mpnn_name]
+        validate_shared_sequences(record, entry)
+        a_sep_label, d_sep_label = mapped_sep_labels(entry, sep_source_residue)
+        _, a_sep_resid = parse_residue_label(a_sep_label)
+        _, d_sep_resid = parse_residue_label(d_sep_label)
+        chains = record.chains
+        if chains["A"][a_sep_resid - 1] not in {"S", "E"}:
+            raise ValueError(
+                f"Expected S or E at {a_sep_label} in {record.design_key}, "
+                f"got {chains['A'][a_sep_resid - 1]!r}."
+            )
+        if chains["D"][d_sep_resid - 1] != "S":
+            raise ValueError(
+                f"Expected S at {d_sep_label} in {record.design_key}, "
+                f"got {chains['D'][d_sep_resid - 1]!r}."
+            )
+        a_seq_for_sep = replace_sequence_residue(chains["A"], a_sep_resid, "S")
+        base = record.design_key
+        if state_specs is None:
+            task_defs = [
+                ("AB_SEP", {"A": a_seq_for_sep, "B": chains["B"]}, "A", a_sep_resid),
+                ("DC_SER", {"D": chains["D"], "C": chains["C"]}, None, None),
+                ("AC_SEP", {"A": a_seq_for_sep, "C": chains["C"]}, "A", a_sep_resid),
+                ("DB_SER", {"D": chains["D"], "B": chains["B"]}, None, None),
+                ("A_SEP", {"A": a_seq_for_sep}, "A", a_sep_resid),
+                ("D_SER", {"D": chains["D"]}, None, None),
+                ("B", {"B": chains["B"]}, None, None),
+                ("C", {"C": chains["C"]}, None, None),
+            ]
+        else:
+            task_defs = []
+            for spec in state_specs:
+                name = str(spec["name"])
+                chain_ids = [str(chain) for chain in spec["chains"]]
+                missing = [chain for chain in chain_ids if chain not in chains]
+                if missing:
+                    raise ValueError(f"State {name!r} uses unavailable chains: {missing}")
+                sep_chain = spec.get("sep_chain")
+                if sep_chain not in (None, "A", "D"):
+                    raise ValueError(
+                        f"State {name!r} sep_chain must be A, D, or null"
+                    )
+                sep_resid = None
+                task_chains = {chain: chains[chain] for chain in chain_ids}
+                if sep_chain == "A":
+                    if "A" not in task_chains:
+                        raise ValueError(f"State {name!r} phosphorylates absent chain A")
+                    task_chains["A"] = a_seq_for_sep
+                    sep_resid = a_sep_resid
+                elif sep_chain == "D":
+                    if "D" not in task_chains:
+                        raise ValueError(f"State {name!r} phosphorylates absent chain D")
+                    task_chains["D"] = replace_sequence_residue(
+                        chains["D"], d_sep_resid, "S"
+                    )
+                    sep_resid = d_sep_resid
+                task_defs.append((name, task_chains, sep_chain, sep_resid))
+        for complex_kind, task_chains, sep_chain, sep_resid in task_defs:
+            if states is not None and complex_kind not in states:
+                continue
+            tasks.append(
+                FoldTask(
+                    task_id=f"{base}_{complex_kind}",
+                    complex_kind=complex_kind,
+                    record=record,
+                    chains=task_chains,
+                    sep_chain=sep_chain,
+                    sep_residue_one_based=sep_resid,
+                    sep_position_zero_based=(
+                        None if sep_resid is None else sep_resid - 1
+                    ),
+                )
+            )
+    return tasks
+
+
+def task_to_manifest(task: FoldTask) -> dict[str, Any]:
+    return {
+        "task_id": task.task_id,
+        "complex_kind": task.complex_kind,
+        "design_key": task.record.design_key,
+        "sequence_design_backend": getattr(task.record, "backend", "proteinmpnn"),
+        "sequence_design_input": task.record.mpnn_name,
+        "sequence_design_structure": task.record.mpnn_cif,
+        "sequence_design_score": getattr(task.record, "backend_score", None),
+        "mpnn_name": task.record.mpnn_name,
+        "model_index": task.record.model_index,
+        "batch_index": task.record.batch_index,
+        "design_index": task.record.design_index,
+        "sequence_recovery": task.record.sequence_recovery,
+        "mpnn_cif": task.record.mpnn_cif,
+        "chains": {chain: len(seq) for chain, seq in task.chains.items()},
+        "sequences": task.chains,
+        "sep_chain": task.sep_chain,
+        "sep_residue_one_based": task.sep_residue_one_based,
+        "sep_position_zero_based": task.sep_position_zero_based,
+    }
+
+
+def metric_to_numpy(value: Any):
+    import numpy as np
+
+    if value is None or callable(value):
+        raise TypeError("metric is missing")
+    if hasattr(value, "detach"):
+        value = value.detach().cpu()
+    if hasattr(value, "numpy"):
+        value = value.numpy()
+    return np.asarray(value, dtype=float)
+
+
+def collect_pae_metrics(sample_result: Any, task: FoldTask) -> dict[str, Any]:
+    import numpy as np
+
+    for attr_name in PAE_ATTRIBUTE_CANDIDATES:
+        if not hasattr(sample_result, attr_name):
+            continue
+        try:
+            metric = metric_to_numpy(getattr(sample_result, attr_name))
+        except (TypeError, ValueError):
+            continue
+        finite_values = metric[np.isfinite(metric)]
+        if finite_values.size == 0:
+            continue
+        metrics = {"mean_pae": float(finite_values.mean())}
+        if metric.ndim != 2 or metric.shape[0] != metric.shape[1]:
+            return metrics
+        labels = pae_group_labels(sample_result, task, metric.shape[0])
+        if labels is None:
+            return metrics
+        inter_chain_values = metric[labels[:, None] != labels[None, :]]
+        finite_inter_chain = inter_chain_values[np.isfinite(inter_chain_values)]
+        if finite_inter_chain.size:
+            metrics["mean_ipae"] = float(finite_inter_chain.mean())
+        return metrics
+    return {}
+
+
+def pae_group_labels(sample_result: Any, task: FoldTask, pae_length: int) -> Any | None:
+    """Return labels used to aggregate inter-chain PAE values.
+
+    SEP and other ESMFold2 modifications can be represented by token-level
+    labels that do not match the final structure residue count. Prefer labels
+    returned by ESMFold2 when they match the PAE matrix length, then fall back
+    to plain input-chain sequence lengths for unmodified folds.
+    """
+
+    import numpy as np
+
+    complex_chain_id = getattr(
+        getattr(sample_result, "complex", None), "chain_id", None
+    )
+    if complex_chain_id is not None and len(complex_chain_id) == pae_length:
+        labels = np.asarray(complex_chain_id)
+        if np.unique(labels).size > 1:
+            return labels
+
+    entity_id = getattr(sample_result, "entity_id", None)
+    if entity_id is not None:
+        try:
+            labels = metric_to_numpy(entity_id).astype(int)
+        except (TypeError, ValueError):
+            labels = None
+        if (
+            labels is not None
+            and labels.size == pae_length
+            and np.unique(labels).size > 1
+        ):
+            return labels
+
+    labels = np.asarray(
+        [
+            chain_id
+            for chain_id, sequence in task.chains.items()
+            for _ in range(len(sequence))
+        ]
+    )
+    if labels.size == pae_length and np.unique(labels).size > 1:
+        return labels
+    return None
+
+
+def ensure_local_snapshot(repo_id: str) -> Path:
+    from huggingface_hub import snapshot_download
+
+    cache_dir = os.environ.get("HF_HUB_CACHE")
+    if not cache_dir:
+        raise RuntimeError("HF_HUB_CACHE must be set by scripts/esm_exec.sh")
+    snapshot = snapshot_download(
+        repo_id=repo_id, cache_dir=cache_dir, local_files_only=True
+    )
+    print(f"local_snapshot[{repo_id}]={snapshot}")
+    return Path(snapshot)
+
+
+def load_esmfold2_model(model_key: str):
+    import torch
+    from transformers.models.esmfold2.modeling_esmfold2 import ESMFold2Model
+
+    if not torch.cuda.is_available():
+        raise RuntimeError("CUDA is required for ESMFold2 folding on CoreHPC.")
+
+    repo_id = MODEL_REPOS[model_key]
+    ensure_local_snapshot(repo_id)
+    ensure_local_snapshot(ESMC_REPO)
+
+    print(f"torch={torch.__version__}")
+    print("torch_cuda_available=True")
+    print(f"torch_cuda_device={torch.cuda.get_device_name(0)}")
+    model = ESMFold2Model.from_pretrained(repo_id, local_files_only=True).cuda().eval()
+    return repo_id, model
+
+
+def fold_kwargs_from_args(args: argparse.Namespace) -> dict[str, Any]:
+    values = {
+        "num_loops": args.num_loops,
+        "num_sampling_steps": args.num_sampling_steps,
+        "num_diffusion_samples": args.num_diffusion_samples,
+        "seed": args.seed,
+        "noise_scale": args.noise_scale,
+        "step_scale": args.step_scale,
+        "max_inference_sigma": args.max_inference_sigma,
+        "lm_mask_pct": args.lm_mask_pct,
+        "lm_dropout": args.lm_dropout,
+        "msa_max_depth": args.msa_max_depth,
+        "msa_column_mask_rate": args.msa_column_mask_rate,
+    }
+    return {key: value for key, value in values.items() if value is not None}
+
+
+def stable_task_seed(base_seed: int, task_id: str) -> int:
+    """Derive an order-independent, non-negative 31-bit seed for one task."""
+
+    digest = hashlib.sha256(f"{base_seed}:{task_id}".encode()).digest()
+    return int.from_bytes(digest[:8], "big") % (2**31)
+
+
+def task_is_complete(out_dir: Path, task_id: str) -> bool:
+    """Return whether a task JSON exists and all CIFs it records are present."""
+
+    task_json = out_dir / f"{task_id}.json"
+    if not task_json.is_file():
+        return False
+    try:
+        payload = read_json(task_json)
+        cif_paths = [Path(path) for path in payload.get("cifs", [])]
+    except (OSError, ValueError, TypeError):
+        return False
+    return bool(cif_paths) and all(
+        path.is_file() and path.stat().st_size > 0 for path in cif_paths
+    )
+
+
+def load_design_keys(path: Path | None) -> set[str] | None:
+    if path is None:
+        return None
+    payload = read_json(path)
+    values = payload.get("design_keys", []) if isinstance(payload, dict) else payload
+    if not isinstance(values, list) or not all(
+        isinstance(value, str) for value in values
+    ):
+        raise ValueError(f"{path} must contain a JSON list of design keys.")
+    return set(values)
+
+
+def parse_states(value: str | None) -> set[str] | None:
+    if value is None:
+        return None
+    allowed = {"AB_SEP", "DC_SER", "AC_SEP", "DB_SER", "A_SEP", "D_SER", "B", "C"}
+    states = {item.strip() for item in value.split(",") if item.strip()}
+    unknown = states - allowed
+    if unknown:
+        raise ValueError("Unknown ESMFold2 state(s): " + ", ".join(sorted(unknown)))
+    if not states:
+        raise ValueError("--states must select at least one state.")
+    return states
+
+
+def load_state_specs(path: Path | None) -> list[dict[str, Any]] | None:
+    if path is None:
+        return None
+    payload = read_json(path.resolve())
+    specs = payload.get("states") if isinstance(payload, dict) else payload
+    if not isinstance(specs, list) or not specs:
+        raise ValueError("--state-specs-json must contain a non-empty states list")
+    names: set[str] = set()
+    normalized = []
+    for raw in specs:
+        if not isinstance(raw, dict) or "name" not in raw or "chains" not in raw:
+            raise ValueError("Every state specification requires name and chains")
+        name = str(raw["name"])
+        if name in names:
+            raise ValueError(f"Duplicate state name: {name}")
+        chains = raw["chains"]
+        if not isinstance(chains, list) or not chains:
+            raise ValueError(f"State {name!r} must select at least one chain")
+        names.add(name)
+        normalized.append(
+            {
+                "name": name,
+                "chains": [str(chain) for chain in chains],
+                "sep_chain": raw.get("sep_chain"),
+            }
+        )
+    return normalized
+
+
+def run_fold(
+    task: FoldTask,
+    model: Any,
+    model_key: str,
+    repo_id: str,
+    out_dir: Path,
+    kwargs: dict[str, Any],
+) -> dict[str, Any]:
+    from esm.models.esmfold2 import (
+        ESMFold2InputBuilder,
+        Modification,
+        ProteinInput,
+        StructurePredictionInput,
+    )
+
+    sequence_inputs = []
+    for chain_id, sequence in task.chains.items():
+        modifications = None
+        if task.sep_chain == chain_id:
+            modifications = [
+                Modification(position=task.sep_position_zero_based, ccd="SEP")
+            ]
+        sequence_inputs.append(
+            ProteinInput(id=chain_id, sequence=sequence, modifications=modifications)
+        )
+
+    spi = StructurePredictionInput(sequences=sequence_inputs)
+    result = ESMFold2InputBuilder().fold(model, spi, complex_id=task.task_id, **kwargs)
+
+    results = result if isinstance(result, list) else [result]
+    cif_paths: list[str] = []
+    sample_summaries: list[dict[str, Any]] = []
+    for sample_idx, sample_result in enumerate(results):
+        suffix = f"_diffusion{sample_idx}" if len(results) > 1 else ""
+        cif_path = out_dir / f"{task.task_id}{suffix}.cif"
+        cif_path.write_text(sample_result.complex.to_mmcif())
+        cif_paths.append(str(cif_path))
+        sample_summaries.append(
+            {
+                "cif": str(cif_path),
+                "plddt_mean": float(sample_result.plddt.mean()),
+                "ptm": float(sample_result.ptm),
+                "iptm": float(sample_result.iptm),
+                **collect_pae_metrics(sample_result, task),
+            }
+        )
+
+    payload = task_to_manifest(task) | {
+        "model_key": model_key,
+        "model_repo": repo_id,
+        "fold_kwargs": kwargs,
+        "cifs": cif_paths,
+        "samples": sample_summaries,
+    }
+    write_json(out_dir / f"{task.task_id}.json", payload)
+    print(json.dumps({"task_id": task.task_id, "cifs": cif_paths}, sort_keys=True))
+    return payload
+
+
+def main() -> None:
+    args = parse_args()
+    mpnn_output_dir = args.mpnn_output_dir.resolve()
+    out_dir = args.out_dir.resolve()
+    out_dir.mkdir(parents=True, exist_ok=True)
+
+    manifest = load_sequence_design_manifest(
+        mpnn_output_dir, args.sequence_design_backend
+    )
+    records = load_sequence_design_records(
+        mpnn_output_dir, manifest, args.sequence_design_backend
+    )
+    selected_design_keys = load_design_keys(args.design_keys_json)
+    if selected_design_keys is not None:
+        records = [
+            record for record in records if record.design_key in selected_design_keys
+        ]
+    passing = load_prefilter_pass_set(args.prefilter_summary)
+    if args.prefilter_summary and not args.force_through_prefilter:
+        records = [record for record in records if record.design_key in passing]
+    if args.states and args.state_specs_json:
+        raise ValueError("--states and --state-specs-json are mutually exclusive")
+    states = parse_states(args.states)
+    state_specs = load_state_specs(args.state_specs_json)
+    tasks = build_fold_tasks(
+        records,
+        manifest,
+        args.sep_source_residue,
+        states=states,
+        state_specs=state_specs,
+    )
+
+    planned_payload = {
+        "sequence_design_backend": args.sequence_design_backend,
+        "sequence_design_output_dir": str(mpnn_output_dir),
+        "mpnn_output_dir": str(mpnn_output_dir),
+        "out_dir": str(out_dir),
+        "model_key": args.model,
+        "model_repo": MODEL_REPOS[args.model],
+        "sep_source_residue": args.sep_source_residue,
+        "force_through_prefilter": args.force_through_prefilter,
+        "prefilter_summary": (
+            str(args.prefilter_summary) if args.prefilter_summary else ""
+        ),
+        "num_sequence_design_records_selected": len(records),
+        "num_mpnn_records_selected": len(records),
+        "num_fold_tasks": len(tasks),
+        "states": (
+            state_specs
+            if state_specs is not None
+            else (sorted(states) if states is not None else "all")
+        ),
+        "state_specs_json": str(args.state_specs_json) if args.state_specs_json else "",
+        "design_keys_json": str(args.design_keys_json) if args.design_keys_json else "",
+        "resume": args.resume,
+        "derive_task_seeds": args.derive_task_seeds,
+        "fold_kwargs": fold_kwargs_from_args(args),
+        "tasks": [task_to_manifest(task) for task in tasks],
+    }
+    write_json(out_dir / "planned_folds.json", planned_payload)
+    print(
+        "planned_folds="
+        + json.dumps(
+            {"records": len(records), "fold_tasks": len(tasks)}, sort_keys=True
+        )
+    )
+
+    if args.dry_run or not tasks:
+        write_json(
+            out_dir / "esmfold2_run_manifest.json",
+            planned_payload | {"dry_run": args.dry_run},
+        )
+        return
+
+    repo_id, model = load_esmfold2_model(args.model)
+    fold_kwargs = fold_kwargs_from_args(args)
+    completed: list[dict[str, Any]] = []
+    failures: list[dict[str, Any]] = []
+    for task in tasks:
+        if args.resume and task_is_complete(out_dir, task.task_id):
+            completed.append(read_json(out_dir / f"{task.task_id}.json"))
+            print(json.dumps({"task_id": task.task_id, "status": "already_complete"}))
+            continue
+        try:
+            task_kwargs = dict(fold_kwargs)
+            if args.derive_task_seeds and args.seed is not None:
+                task_kwargs["seed"] = stable_task_seed(args.seed, task.task_id)
+            completed.append(
+                run_fold(task, model, args.model, repo_id, out_dir, task_kwargs)
+            )
+        except Exception as exc:
+            failures.append(task_to_manifest(task) | {"error": str(exc)})
+            write_json(
+                out_dir / "esmfold2_run_manifest.json",
+                planned_payload | {"completed": completed, "failures": failures},
+            )
+            raise
+
+    write_json(
+        out_dir / "esmfold2_run_manifest.json",
+        planned_payload | {"completed": completed, "failures": failures},
+    )
+
+
+if __name__ == "__main__":
+    main()
