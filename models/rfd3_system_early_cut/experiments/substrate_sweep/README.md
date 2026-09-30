@@ -32,7 +32,14 @@ compare existing files before replacing them. The project supplies
 `scripts/foundry_exec.sh`, `scripts/esm_exec.sh`, its Foundry image/checkpoint,
 and the ESM environment for Matplotlib. No new software or weights are needed.
 
-From the CoreHPC project root:
+From the CoreHPC project root, `scripts/submit_rfd3_substrate_sweep.sh` submits
+the CPU preflight, pilot, pilot analysis, remaining nine seeds, and full analysis
+with `afterok` dependencies and invalid-dependency cancellation. It writes job
+IDs under `logs/`. Use `--pilot-job ID` only to attach the remaining stages to
+an already submitted seed-101 pilot. Do not run the submitter twice for the
+same active experiment.
+
+Individual stage commands are also available:
 
 ```bash
 sbatch jobs/rfd3_substrate_sweep_tests.sbatch
