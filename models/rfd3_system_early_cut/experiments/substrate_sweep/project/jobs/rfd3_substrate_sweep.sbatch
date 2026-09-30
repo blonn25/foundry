@@ -17,7 +17,7 @@ module load nvhpc/26.5
 ROOT=/project/outputs/foundry/rfd3_system_early_cut/substrate_sweep_001
 SEED="${SLURM_ARRAY_TASK_ID:?Submit --array=101 for pilot, then --array=102-110}"
 # Only the pilot creates the immutable campaign manifest, before other seeds run.
-if [[ "${SEED}" == 101 ]]; then
+if [[ "${SEED}" == 101 && ! -f outputs/foundry/rfd3_system_early_cut/substrate_sweep_001/resolved_config.json ]]; then
   srun scripts/rfd3_substrate_sweep_exec.sh python -m rfd3_system_early_cut.experiments.substrate_sweep prepare --root "${ROOT}"
 fi
 srun scripts/rfd3_substrate_sweep_exec.sh --gpu python -m rfd3_system_early_cut.experiments.substrate_sweep run \

@@ -65,6 +65,47 @@ class SubstrateSweepTests(unittest.TestCase):
                    return_value=np.array(['c']*30)):
             self.assertIsNone(topology(helix, helix)['structured_agreement'])
 
+    def test_cif_final_state_and_fixed_ligand_validation(self):
+        import tempfile
+        from biotite.structure import AtomArray, concatenate
+        from biotite.structure.io.pdbx import CIFFile, set_structure
+        from rfd3_system_early_cut.experiments.substrate_analysis import structure_metrics
+        t = np.arange(120)
+        coords = np.column_stack([2.3*np.cos(t*np.deg2rad(100)),
+                                  2.3*np.sin(t*np.deg2rad(100)), 1.5*t]).astype(np.float32)
+        protein = AtomArray(120)
+        protein.coord = coords
+        protein.atom_name[:] = 'CA'
+        protein.element[:] = 'C'
+        protein.chain_id[:] = 'A'
+        protein.res_id = t+1
+        protein.res_name[:] = 'ALA'
+        ligand = AtomArray(2)
+        ligand.coord = [[30, 0, 0], [31, 0, 0]]
+        ligand.atom_name = np.array(['C1', 'O1'])
+        ligand.element = np.array(['C', 'O'])
+        ligand.chain_id[:] = 'L'
+        ligand.res_name[:] = 'LIG'
+        ligand.res_id[:] = 1
+        ligand.hetero[:] = True
+        config = {'origin': [0, 0, 0], 'ligands': {'acetate': {'coordinates': {
+            str(a.atom_name): a.coord.tolist() for a in ligand}}}}
+        with tempfile.TemporaryDirectory() as temp:
+            path = Path(temp) / 'synthetic.cif'
+            cif = CIFFile()
+            set_structure(cif, concatenate([protein, ligand]))
+            cif.write(path)
+            result = structure_metrics(path, coords, config, 'acetate')
+            self.assertEqual(result['sequence'], 'A'*120)
+            self.assertEqual(result['ca_break_count'], 0)
+            self.assertEqual(result['ligand_contact_atom_pairs'], 0)
+            self.assertEqual(result['ligand_fixed_max_coordinate_error'], 0)
+            with self.assertRaisesRegex(ValueError, 'recorded final state'):
+                structure_metrics(path, coords+1, config, 'acetate')
+            config['origin'] = [1, 0, 0]
+            with self.assertRaisesRegex(ValueError, 'fixed pose'):
+                structure_metrics(path, coords, config, 'acetate')
+
     def test_summary_preserves_missing_values_and_valid_counts(self):
         from rfd3_system_early_cut.experiments.substrate_analysis import stats
         self.assertEqual(stats([None, None]), {'n': 0, 'mean': None, 'sd': None})
