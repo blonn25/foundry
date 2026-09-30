@@ -121,3 +121,39 @@ no additional dependencies or checkpoints are required. Project helper/job
 copies are preserved under `examples/project/`. CPU validation additionally
 places the original package on PYTHONPATH for the baseline comparison; normal
 new-model inference does not import the original coupled implementation.
+
+## Completed validation (September 29, 2026)
+
+CPU job `2071629` passed all nine tests, including the public Hydra controls
+and checkpoint namespace mapping (13 seconds; 1.21 GiB peak host RSS).
+The preceding eight-test run `2071624` also passed.
+
+GPU job `2071625` completed on an H100 NVL in 5m38s with 13.89 GiB peak
+host RSS. It generated ten track complexes from five paired runs, each using
+199 updates with the same seed. All four early-cut cases retained 200 C-alpha
+state measurements with full trajectory dumping disabled.
+
+| Release setting | Coupled updates | Final shared-chain state CA RMSD (Å) |
+| --- | ---: | ---: |
+| Disabled | 199 | 0.000000 |
+| Immediate (`fraction=0`) | 0 | 21.755810 |
+| `fraction=0.5` | 99 | 8.860096 |
+| `sigma=57.42110824584961` | 99 | 8.860096 |
+
+These are unaligned, common-frame state RMSDs from one implementation smoke
+seed, not design-quality estimates. Whole-chain and movable-CA selections
+coincide in this de novo example. Fixed SEP/SER motif mapping is covered by
+the CPU tests.
+
+Both tracks' internal final coordinates matched exactly between the original
+model and release-disabled copy, and between the fraction and equivalent
+sigma cases (maximum absolute difference 0). Shared injected-noise differences
+were exactly 0 at every update. Movable-CA RMSD stayed exactly 0 through the
+coupled phase and became nonzero after release. The midpoint release used
+pre-churn sigma 57.421108 Å and churned `t_hat` 91.873772 Å.
+
+Results, JSON diagnostics, PNG plots, and CSV traces are under
+`outputs/foundry/rfd3_system_early_cut/smoke_2071625/` on CoreHPC and Wynton.
+The original `models/rfd3_system/` tree remains identical to the baseline
+Foundry revision `5e51cf0`. Validation used the `0b225db` implementation;
+`d5b9a7d` adds the public-configuration test and strict plotting failure status.
