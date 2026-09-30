@@ -81,7 +81,7 @@ class SubstrateSweepTests(unittest.TestCase):
         protein.res_id = t+1
         protein.res_name[:] = 'ALA'
         ligand = AtomArray(2)
-        ligand.coord = [[30, 0, 0], [31, 0, 0]]
+        ligand.coord = np.array([[30, 0, 0], [31, 0, 0]], dtype=np.float32)
         ligand.atom_name = np.array(['C1', 'O1'])
         ligand.element = np.array(['C', 'O'])
         ligand.chain_id[:] = 'L'
