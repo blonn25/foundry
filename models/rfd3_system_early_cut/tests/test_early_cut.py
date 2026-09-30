@@ -47,10 +47,11 @@ def track(n, scale, fixed_offset=0):
                    "scale": scale}, initializer_outputs={}, coord_atom_lvl_to_be_noised=coords)
 
 
-def run(sampler_class=NewSampler, *, partial=None, identical=False, **settings):
+def run(sampler_class=NewSampler, *, partial=None, identical=False, observer=None, **settings):
     sampler = sampler_class(num_timesteps=6, sigma_data=1, s_max=2, s_min=0.1, p=1,
                             gamma_min=0, step_scale=1, **settings)
     sampler.calls = []
+    sampler.state_observer = observer
     t1, t2 = track(5, 0.2), track(7, 0.2 if identical else 0.6, 1)
     if partial is not None:
         t1["f"]["partial_t"] = t2["f"]["partial_t"] = torch.tensor(partial)

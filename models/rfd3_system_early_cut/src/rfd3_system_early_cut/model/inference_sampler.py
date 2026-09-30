@@ -655,6 +655,9 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
         validate_cutoff(coupling_cut_fraction, coupling_cut_sigma)
         self.coupling_cut_fraction = coupling_cut_fraction
         self.coupling_cut_sigma = coupling_cut_sigma
+        # Optional experiment instrumentation. Observers receive detached CPU
+        # copies, so they cannot alter sampler state or the shared noise.
+        self.state_observer = None
         self.proxy_norm_weight = proxy_norm_weight
         self.proxy_kappa_min = proxy_kappa_min
         self.proxy_kappa_max = proxy_kappa_max
@@ -845,6 +848,31 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
                 ))
 
         record_state()
+        def observe_state(completed_updates, sigma, noise_1=None, noise_2=None):
+            if self.state_observer is None:
+                return
+
+            def snapshot(value):
+                return value.detach().to(device="cpu", copy=True)
+
+            event = {
+                "completed_updates": completed_updates,
+                "sigma": float(sigma),
+                "coordinate_dtype": str(X1_L.dtype),
+                "ca_1": snapshot(X1_L[:, ca_indices["all_1"]]),
+                "ca_2": snapshot(X2_L[:, ca_indices["all_2"]]),
+                "fixed_1": snapshot(X1_L[:, fixed_1]),
+                "fixed_2": snapshot(X2_L[:, fixed_2]),
+            }
+            if completed_updates == 0:
+                event["initial_shared_1"] = snapshot(X1_L[:, shared_update_atom_indices_1])
+                event["initial_shared_2"] = snapshot(X2_L[:, shared_update_atom_indices_2])
+            else:
+                event["noise_1"] = snapshot(noise_1[:, shared_update_atom_indices_1])
+                event["noise_2"] = snapshot(noise_2[:, shared_update_atom_indices_2])
+            self.state_observer(event)
+
+        observe_state(0, noise_schedule[0])
         coupling_active_steps = []
         shared_noise_max_abs_difference = []
         X1_noisy_traj = []
@@ -1043,6 +1071,7 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
             state_diag["completed_updates"].append(step_num + 1)
             state_diag["sigma"].append(c_t.detach().cpu())
             record_state()
+            observe_state(step_num + 1, c_t, epsilon_1, epsilon_2)
 
             if exists(outs1.get("sequence_logits_I")):
                 p1 = torch.softmax(outs1["sequence_logits_I"], dim=-1).cpu()
