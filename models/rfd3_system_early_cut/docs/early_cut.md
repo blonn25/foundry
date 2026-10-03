@@ -108,9 +108,10 @@ for both protein and mapped ligand atoms. Unmapped ligand atoms always use
 their native independent updates/noise. Fraction zero still shares
 initialization and noise, but performs no coupled updates.
 
-Ligand churn uses a separate seeded Torch generator, leaving all original
-protein RNG draws in place. Thus enabling ligand coupling does not consume
-extra values from the protein random stream. This is not a promise of
+Ligand churn reuses track 1's native ligand random draw for the paired atoms
+in track 2, leaving all original protein RNG draws in place. This adds no RNG
+consumption and does not restart a separate stream for repeated batches.
+This is not a promise of
 identical protein outputs: the ligand coordinates affect the denoiser.
 The original coupled restrictions on CFG/realignment/jitter still apply.
 No new rigid-body rotations or bond constraints are introduced. Atomwise

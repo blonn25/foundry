@@ -99,6 +99,16 @@ class LigandCouplingTests(unittest.TestCase):
                    side_effect=AssertionError('No proxy after release')):
             run(ligand_map=MAP, coupling_cut_fraction=0)
 
+    def test_repeated_inference_calls_advance_ligand_noise(self):
+        first, second = [], []
+        run(ligand_map=MAP, coupling_cut_fraction=.4, observer=first.append)
+        # Emulate a subsequent engine batch without resetting its global RNG.
+        with patch('torch.manual_seed'):
+            run(ligand_map=MAP, coupling_cut_fraction=.4, observer=second.append)
+        self.assertFalse(torch.equal(first[1]['mapped_ligand_noise_1'], second[1]['mapped_ligand_noise_1']))
+        for event in second[1:]:
+            self.assertTrue(torch.equal(event['mapped_ligand_noise_1'], event['mapped_ligand_noise_2']))
+
     def test_observer_copies_do_not_mutate_ligands(self):
         reference, _, rng = run(ligand_map=MAP, coupling_cut_fraction=.4)
         def mutate(event):

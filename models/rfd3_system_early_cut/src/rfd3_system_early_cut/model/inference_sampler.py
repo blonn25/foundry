@@ -800,7 +800,6 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
             if left.ndim != 1 or left.numel() == 0 or left.shape != right.shape:
                 raise ValueError("Shared C-alpha diagnostic maps must be nonempty paired vectors.")
         ligand_indices = None
-        ligand_generator = None
         if shared_ligand_atom_indices is not None:
             ligand_indices = {key: torch.as_tensor(value, device=device, dtype=torch.long)
                               for key, value in shared_ligand_atom_indices.items()}
@@ -815,10 +814,6 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
                     raise ValueError("Mapped ligand indices overlap fixed or protein atoms")
             if ligand_indices["mapped_1"].shape != ligand_indices["mapped_2"].shape:
                 raise ValueError("Mapped ligand index shapes differ")
-            # Additional random draws never advance the original protein RNG.
-            # This permits matched protein noise against fixed-ligand controls.
-            ligand_generator = torch.Generator(device=device)
-            ligand_generator.manual_seed((torch.initial_seed() + 104729) % (2**63-1))
         ligand_state = []
         ligand_noise_difference = []
         normalized_t_values = self._noise_schedule_to_normalized_t(noise_schedule)[:-1]
@@ -995,11 +990,10 @@ class SampleDiffusionWithSuperDiffSharedChainProxy(SampleDiffusionWithMotif):
             epsilon_2[:, shared_update_atom_indices_2, :] = epsilon_shared
 
             if ligand_indices is not None:
-                ligand_noise = eps_scale * torch.randn(
-                    (D, len(ligand_indices["mapped_1"]), 3), device=device,
-                    generator=ligand_generator)
-                epsilon_1[:, ligand_indices["mapped_1"]] = ligand_noise
-                epsilon_2[:, ligand_indices["mapped_2"]] = ligand_noise
+                # Reuse track 1's native ligand draw, just as for initialization.
+                # No extra RNG consumption or per-call generator reset: protein
+                # draws retain exact parity, and repeated batches advance normally.
+                epsilon_2[:, ligand_indices["mapped_2"]] = epsilon_1[:, ligand_indices["mapped_1"]]
                 ligand_noise_difference.append((epsilon_1[:, ligand_indices["mapped_1"]]
                     - epsilon_2[:, ligand_indices["mapped_2"]]).abs().flatten(1).amax(1).detach().cpu())
                 if coupling_active:

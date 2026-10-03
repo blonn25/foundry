@@ -105,5 +105,5 @@ def resolve_ligand_pairs(pairs, source_1, source_2, example_1, example_2):
                     indices=indices, boundary_bonds={'track_1': boundary[0], 'track_2': boundary[1]},
                     policy='same cutoff and mixing coefficient as protein; shared noise remains after release',
                     kappa_solve_policy='protein-only kappa solve; its scalar also mixes mapped ligand updates',
-                    noise_policy='mapped ligand churn uses a separate seeded generator; original protein RNG draws unchanged')
+                    noise_policy='mapped ligand churn reuses track 1 native draws; original protein RNG draws unchanged')
     return indices, metadata

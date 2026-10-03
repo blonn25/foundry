@@ -48,8 +48,8 @@ complete attempt per seed. Recovery should use new job IDs after inspecting
 the recorded failure, not overwrite the immutable experiment configuration.
 
 Each GPU task runs all 21 settings for one seed. The sampler retains the
-original protein RNG draw order and uses a separate seeded generator for
-mapped-ligand churn. The run checks protein initialization and every churn
+original protein RNG draw order and reuses track 1's native mapped-ligand
+churn draw in track 2. The run checks protein initialization and every churn
 hash against the corresponding fixed-ligand baseline, and checks protein
 and ligand hashes across all release conditions. Geometry differences are
 therefore not attributable to different injected protein noise. All mapped
@@ -106,8 +106,11 @@ CPU job `2110294` passed 22 tests (nine original, seven substrate, six new
 ligand tests) and both real input feature pipelines. The new tests cover explicit
 mapping, rejection of invalid chemistry/selectors, shared noise and release,
 protein RNG parity, sigma equivalence, observer isolation and public Hydra input.
-Pilot array `2110351` was submitted for seed 101; submission does not imply
-completed results. Project-level documentation records subsequent job IDs.
+Analysis job `2110476` passed two additional geometry tests, the seven substrate
+tests, a synthetic 21-condition end-to-end analysis and all 19 PNG/PDF plotting
+paths. Pilot `2110351` was canceled while still queued, before generating data,
+to include the final native-noise reuse refinement and repeated-batch test.
+Project-level documentation records the replacement pilot and validation IDs.
 
 Use the successful-job sync helper with
 `--output-subdir foundry/rfd3_system_early_cut JOBID`; also copy root manifests
