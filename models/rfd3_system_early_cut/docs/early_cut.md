@@ -65,6 +65,70 @@ Sequence predictions are uncoupled, and recycling retains the checkpoint default
 
 ## Full-trajectory diagnostics
 
+### Optional explicit ligand atom coupling
+
+Only this early-cut package supports `coupled_ligand_atom_pairs`. Its default
+is `[]`, which leaves the previous sampler behavior and RNG stream unchanged.
+Supply source CIF identifiers for each correspondence; atom names may differ:
+
+```yaml
+coupling_mode: superdiff_shared_chain
+inference_sampler:
+  kind: superdiff_shared_chain
+  coupling_cut_fraction: 0.5
+coupled_ligand_atom_pairs:
+  - track_1: {chain: L, residue: 1, atom: C1}
+    track_2: {chain: L, residue: 1, atom: CX}
+  - track_1: {chain: L, residue: 1, atom: O1}
+    track_2: {chain: L, residue: 1, atom: OX}
+```
+
+In the real 4MU inputs, the paired names are identical (C1–C12, O1–O4).
+The JSON template under `experiments/ligand_codiffusion_sweep/config.json`
+lists all 16 pairs explicitly. The Python interface accepts the same list
+in `RFD3InferenceConfig(coupled_ligand_atom_pairs=...)`. Hydra also accepts
+a list override on the command line. In each track specification, ligand
+coordinates must be movable (e.g. `select_fixed_atoms: false`); ligand
+chemistry must remain fixed. This changes coordinates, not molecular identity.
+
+Each pair must resolve uniquely to a ligand atom. Source-to-prepared mapping
+uses native atom/source annotations, so compacted output chain names do not
+change selectors. Duplicate, missing, ambiguous, fixed-coordinate or
+designable-chemistry selections are rejected. Elements, available formal
+charges, and bonds between mapped atoms must agree. Different substituents
+outside the selected subgraph are allowed and their boundary bonds recorded.
+There is no automatic atom mapping or silent ambiguity resolution.
+
+Mapped ligand atoms share initialization and receive the protein's scalar
+mixing coefficient until the same fraction/sigma release boundary. The proxy
+coefficient is still computed from the protein; adding ligand atoms does not
+change its selection or normalization. Following release, ligand updates
+are independent and no coordinate copying remains. Shared churn continues
+for both protein and mapped ligand atoms. Unmapped ligand atoms always use
+their native independent updates/noise. Fraction zero still shares
+initialization and noise, but performs no coupled updates.
+
+Ligand churn uses a separate seeded Torch generator, leaving all original
+protein RNG draws in place. Thus enabling ligand coupling does not consume
+extra values from the protein random stream. This is not a promise of
+identical protein outputs: the ligand coordinates affect the denoiser.
+The original coupled restrictions on CFG/realignment/jitter still apply.
+No new rigid-body rotations or bond constraints are introduced. Atomwise
+mixing can distort ligand geometry, particularly at substituent boundaries;
+the experiment measures that geometry and retains all outcomes.
+
+Output metadata adds `coupling.ligand_coupling` (selectors, resolved indices,
+boundary bonds, policies) and `coupling.shared_ligand_state` (common-frame
+mapped-atom RMSD at initialization and every completed update, plus actual
+shared-noise differences). The experiment observer also stores all ligand
+coordinates and protein-fitted ligand RMSD is calculated in post-processing.
+
+Validate this option with `jobs/rfd3_ligand_codiffusion_tests.sbatch` and
+`jobs/rfd3_ligand_analysis_tests.sbatch`. See the
+[co-diffusion experiment](../experiments/ligand_codiffusion_sweep/README.md).
+
+### Protein state measurements
+
 Every output JSON contains `coupling.shared_chain_state`, even when
 `dump_trajectories=False`. Arrays use `[state, paired_sample]` ordering:
 initialization after shared-coordinate copying, followed by every completed

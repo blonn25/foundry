@@ -105,6 +105,9 @@ class SubstrateSweepTests(unittest.TestCase):
             config['origin'] = [1, 0, 0]
             with self.assertRaisesRegex(ValueError, 'fixed pose'):
                 structure_metrics(path, coords, config, 'acetate')
+            free = structure_metrics(path, coords, config, 'acetate', fixed_ligand=False)
+            self.assertEqual(free['ligand_max_coordinate_displacement'], 1)
+            self.assertNotIn('ligand_fixed_max_coordinate_error', free)
 
     def test_summary_preserves_missing_values_and_valid_counts(self):
         from rfd3_system_early_cut.experiments.substrate_analysis import stats

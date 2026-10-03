@@ -26,7 +26,7 @@ def stats(values):
                 sd=float(array.std(ddof=1)) if len(array) > 1 else None)
 
 
-def structure_metrics(path, expected_ca, config, ligand):
+def structure_metrics(path, expected_ca, config, ligand, *, fixed_ligand=True):
     atoms = read_cif(path)
     protein = atoms.chain_id == 'A'
     ca = atoms[protein & (atoms.atom_name == 'CA')]
@@ -37,7 +37,8 @@ def structure_metrics(path, expected_ca, config, ligand):
     require(set(lig.atom_name) == set(expected) and len(lig) == len(expected), 'Output ligand atoms changed')
     reference = np.array([expected[str(name)] for name in lig.atom_name]) - config['origin']
     fixed_drift = float(np.max(np.abs(lig.coord-reference)))
-    require(fixed_drift < .001, 'Output ligand differs from prepared fixed pose')
+    if fixed_ligand:
+        require(fixed_drift < .001, 'Output ligand differs from prepared fixed pose')
     require(np.isfinite(atoms.coord).all(), 'Nonfinite output atoms')
     # Unknown native identities remain in the index; flag them instead of filtering a pair.
     sequence = ''.join(AA.get(str(name), 'X') for name in ca.res_name)
@@ -48,7 +49,7 @@ def structure_metrics(path, expected_ca, config, ligand):
     contacts = distance < 4.0
     clashes = radii_p[:, None] + radii_l[None, :] - distance > .4
     adjacent = np.linalg.norm(np.diff(ca.coord, axis=0), axis=-1)
-    return dict(sequence=sequence, unknown_residues=sequence.count('X'),
+    result = dict(sequence=sequence, unknown_residues=sequence.count('X'),
                 ligand_minimum_heavy_distance=float(distance.min()),
                 ligand_contact_atom_pairs=int(contacts.sum()),
                 ligand_contact_residues=len(set(heavy.res_id[contacts.any(axis=1)])),
@@ -56,6 +57,9 @@ def structure_metrics(path, expected_ca, config, ligand):
                 ligand_fixed_max_coordinate_error=fixed_drift,
                 ca_break_count=int(np.sum(np.abs(adjacent-3.8) > .75)),
                 ca_adjacent_max_distance=float(adjacent.max()))
+    if not fixed_ligand:
+        result['ligand_max_coordinate_displacement'] = result.pop('ligand_fixed_max_coordinate_error')
+    return result
 
 
 def analyze(root, output, seeds=None):
