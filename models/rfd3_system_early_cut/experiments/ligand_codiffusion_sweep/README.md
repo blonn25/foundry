@@ -110,7 +110,12 @@ Analysis job `2110476` passed two additional geometry tests, the seven substrate
 tests, a synthetic 21-condition end-to-end analysis and all 19 PNG/PDF plotting
 paths. Pilot `2110351` was canceled while still queued, before generating data,
 to include the final native-noise reuse refinement and repeated-batch test.
-Project-level documentation records the replacement pilot and validation IDs.
+Final CPU preflight `2110505` passed 23 tests and both real input pipelines
+in 64 seconds; including the two analysis tests, 25 unique tests passed.
+The replacement submission is pilot `2110506` → pilot analysis `2110507` →
+remaining-seed array `2110508` → full analysis `2110509`. The GPU pilot is
+queued; no scientific results from this sweep are complete yet.
+Project-level documentation records subsequent status changes.
 
 Use the successful-job sync helper with
 `--output-subdir foundry/rfd3_system_early_cut JOBID`; also copy root manifests
