@@ -47,7 +47,7 @@ def track(n, scale, fixed_offset=0):
                    "scale": scale}, initializer_outputs={}, coord_atom_lvl_to_be_noised=coords)
 
 
-def run(sampler_class=NewSampler, *, partial=None, identical=False, observer=None, **settings):
+def run(sampler_class=NewSampler, *, partial=None, identical=False, observer=None, ligand_map=None, **settings):
     sampler = sampler_class(num_timesteps=6, sigma_data=1, s_max=2, s_min=0.1, p=1,
                             gamma_min=0, step_scale=1, **settings)
     sampler.calls = []
@@ -63,6 +63,8 @@ def run(sampler_class=NewSampler, *, partial=None, identical=False, observer=Non
             "all_1": torch.tensor([0, 1, 4]), "all_2": torch.tensor([3, 2, 6]),
             "movable_1": torch.tensor([0, 1]), "movable_2": torch.tensor([3, 2]),
         }
+    if ligand_map is not None:
+        args["shared_ligand_atom_indices"] = ligand_map
     torch.manual_seed(123)
     with torch.no_grad():
         result = sampler.sample_coupled_superdiff_proxy(**args)

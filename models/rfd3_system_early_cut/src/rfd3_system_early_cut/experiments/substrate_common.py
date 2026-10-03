@@ -136,7 +136,7 @@ class StateRecorder:
             a, b = [event[f"noise_{track}"].numpy() for track in (1, 2)]
             require(np.array_equal(a, b), "Applied protein churn differs between tracks")
             self.noise_hashes.append(digest(a))
-            drift = max(float(np.max(np.abs(a - b))) for a, b in zip(fixed, self.fixed_reference))
+            drift = max((float(np.max(np.abs(a - b))) for a, b in zip(fixed, self.fixed_reference) if a.size), default=0.0)
             self.max_fixed_drift = max(self.max_fixed_drift, drift)
             require(drift < 1e-4, f"Fixed ligand moved by {drift} Angstrom")
 

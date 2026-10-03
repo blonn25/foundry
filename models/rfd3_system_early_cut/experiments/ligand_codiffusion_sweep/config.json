@@ -1,0 +1,256 @@
+{
+  "experiment": "ligand_codiffusion_sweep_001",
+  "input_dir": "inputs/substrate_denovo_001",
+  "checkpoint": "/weights/rfd3_latest.ckpt",
+  "protein_length": 120,
+  "seeds": [
+    101,
+    102,
+    103,
+    104,
+    105,
+    106,
+    107,
+    108,
+    109,
+    110
+  ],
+  "coupled_percentages": [
+    100,
+    95,
+    90,
+    85,
+    80,
+    75,
+    70,
+    65,
+    60,
+    55,
+    50,
+    45,
+    40,
+    35,
+    30,
+    25,
+    20,
+    15,
+    10,
+    5,
+    0
+  ],
+  "track_ligands": [
+    "acetate",
+    "butyrate"
+  ],
+  "sampler": {
+    "kind": "superdiff_shared_chain",
+    "num_timesteps": 200,
+    "gamma_0": 0.6,
+    "gamma_min": 1.0,
+    "noise_scale": 1.003,
+    "step_scale": 1.5,
+    "p": 7,
+    "n_recycle": 2,
+    "proxy_norm_weight": 0.5,
+    "proxy_kappa_regularization_rho": 0.0,
+    "use_classifier_free_guidance": false,
+    "allow_realignment": false,
+    "s_trans": 0.0,
+    "s_jitter_origin": 0.0
+  },
+  "fixed_baseline": "outputs/foundry/rfd3_system_early_cut/substrate_sweep_001",
+  "coupled_ligand_atom_pairs": [
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C1"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C1"
+      }
+    },
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C10"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C10"
+      }
+    },
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C11"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C11"
+      }
+    },
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C12"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C12"
+      }
+    },
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C2"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C2"
+      }
+    },
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C3"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C3"
+      }
+    },
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C4"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C4"
+      }
+    },
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C5"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C5"
+      }
+    },
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C6"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C6"
+      }
+    },
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C7"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C7"
+      }
+    },
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C8"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C8"
+      }
+    },
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C9"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "C9"
+      }
+    },
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "O1"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "O1"
+      }
+    },
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "O2"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "O2"
+      }
+    },
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "O3"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "O3"
+      }
+    },
+    {
+      "track_1": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "O4"
+      },
+      "track_2": {
+        "chain": "L",
+        "residue": 1,
+        "atom": "O4"
+      }
+    }
+  ]
+}

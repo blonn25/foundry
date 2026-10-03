@@ -28,6 +28,7 @@ from rfd3_system_early_cut.inference.input_parsing import (
     ensure_input_is_abspath,
 )
 from rfd3_system_early_cut.model.inference_sampler import SampleDiffusionConfig
+from rfd3_system_early_cut.system.ligand_coupling import normalize_ligand_pairs, resolve_ligand_pairs
 from rfd3_system_early_cut.system.chains import (
     assert_matching_shared_chain,
     build_shared_update_atom_map,
@@ -73,6 +74,7 @@ class RFD3InferenceConfig:
     complex_2_partners: List[str] = field(default_factory=lambda: ["C"])
     track_1_specification: Optional[dict] = field(default_factory=dict)
     track_2_specification: Optional[dict] = field(default_factory=dict)
+    coupled_ligand_atom_pairs: List[dict] = field(default_factory=list)
     merged_output_policy: Literal["track1", "track2", "both", "none"] = "none"
 
     # Saving args
@@ -195,6 +197,7 @@ class RFD3InferenceEngine(BaseInferenceEngine):
         track_1_specification: dict | None = None,
         track_2_specification: dict | None = None,
         merged_output_policy: str = "none",
+        coupled_ligand_atom_pairs: list[dict] | None = None,
         **kwargs,
     ):
         if any(inference_sampler.get(key) is not None for key in
@@ -220,6 +223,10 @@ class RFD3InferenceEngine(BaseInferenceEngine):
 
         # Coupled prototype configuration.  These values are engine-level
         # because the ordinary RFD3 input schema is intentionally strict.
+        self.coupled_ligand_atom_pairs = normalize_ligand_pairs(coupled_ligand_atom_pairs)
+        if self.coupled_ligand_atom_pairs and (coupling_mode != "superdiff_shared_chain"
+                or inference_sampler.get("kind") != "superdiff_shared_chain"):
+            raise ValueError("Ligand coupling requires both coupled mode and sampler")
         self.coupling_mode = coupling_mode
         self.shared_chain_id = shared_chain_id
         self.complex_1_partners = list(complex_1_partners or ["B"])
@@ -482,6 +489,15 @@ class RFD3InferenceEngine(BaseInferenceEngine):
             self._feature_mask_np(track_1_output, "is_motif_atom_with_fixed_coord"),
             self._feature_mask_np(track_2_output, "is_motif_atom_with_fixed_coord"),
         )
+        ligand_indices, ligand_metadata = resolve_ligand_pairs(
+            self.coupled_ligand_atom_pairs, track_1_spec.atom_array_input,
+            track_2_spec.atom_array_input, track_1_output, track_2_output,
+        )
+        if ligand_metadata:
+            self._validate_shared_initial_coordinates(
+                track_1_output, track_2_output,
+                ligand_indices["mapped_1"], ligand_indices["mapped_2"],
+            )
         kappa_atom_subset = normalize_kappa_atom_subset(
             self.inference_sampler_overrides.get("kappa_atom_subset", "ALL")
         )
@@ -541,11 +557,12 @@ class RFD3InferenceEngine(BaseInferenceEngine):
                     key: torch.as_tensor(value, device=device, dtype=torch.long)
                     for key, value in ca_atom_map.items()
                 },
+                shared_ligand_atom_indices=ligand_indices if ligand_metadata else None,
                 coupling_metadata=self._base_coupling_metadata(
                     shared_atom_map,
                     kappa_atom_subset,
                     int(kappa_indices_1_np.size),
-                ),
+                ) | ({"ligand_coupling": ligand_metadata} if ligand_metadata else {}),
             )
 
         track_1_arrays, track_1_metadata = self.trainer._build_predicted_atom_array_stack(

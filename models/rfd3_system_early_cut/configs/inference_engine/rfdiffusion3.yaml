@@ -69,6 +69,8 @@ complex_2_partners:
   - C
 track_1_specification: {}
 track_2_specification: {}
+# Explicit source-CIF selectors: [{track_1: {chain: L, residue: 1, atom: C1}, track_2: {chain: L, residue: 1, atom: C1}}]
+coupled_ligand_atom_pairs: []
 merged_output_policy: none  # track1, track2, both, or none
 #########################################################
 

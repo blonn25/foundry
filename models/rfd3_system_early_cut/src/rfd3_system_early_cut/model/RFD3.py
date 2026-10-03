@@ -117,6 +117,7 @@ class RFD3(nn.Module):
         shared_kappa_atom_indices_2: torch.Tensor,
         coupling_metadata: dict,
         shared_ca_atom_indices: dict[str, torch.Tensor],
+        shared_ligand_atom_indices: dict | None = None,
     ) -> dict:
         """Run approximate shared-chain coupled inference for two tracks.
 
@@ -156,4 +157,5 @@ class RFD3(nn.Module):
             diffusion_batch_size=track_1_coord_atom_lvl_to_be_noised.shape[0],
             coupling_metadata=coupling_metadata,
             shared_ca_atom_indices=shared_ca_atom_indices,
+            shared_ligand_atom_indices=shared_ligand_atom_indices,
         )
