@@ -113,9 +113,13 @@ to include the final native-noise reuse refinement and repeated-batch test.
 Final CPU preflight `2110505` passed 23 tests and both real input pipelines
 in 64 seconds; including the two analysis tests, 25 unique tests passed.
 The replacement submission is pilot `2110506` → pilot analysis `2110507` →
-remaining-seed array `2110508` → full analysis `2110509`. The GPU pilot is
-queued; no scientific results from this sweep are complete yet.
-Project-level documentation records subsequent status changes.
+remaining-seed array `2110508` → full analysis `2110509`. All stages completed
+successfully: 210 pairs / 420 structures and 19 PNG/PDF plot pairs, synced to
+Wynton with the immutable manifests. All shared-noise audits passed, including
+exact protein-noise agreement with the fixed-ligand baseline. GPU tasks took
+about 18–19 minutes each; full analysis took 46 seconds.
+See the bundled [project results report](project/docs/rfd3_system_early_cut.md)
+for numerical comparisons and output links.
 
 Use the successful-job sync helper with
 `--output-subdir foundry/rfd3_system_early_cut JOBID`; also copy root manifests

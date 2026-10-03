@@ -229,8 +229,7 @@ All completed pairs are retained, including geometry outliers.
 Runtime audits require protein initialization and all 199 churn hashes to match
 both across fractions and against the completed fixed-ligand baseline. They also
 check the exact coupled protein/ligand prefix and ligand noise correspondence.
-This cross-experiment GPU audit has not yet completed; failure prevents the
-remaining seeds from running.
+All runtime audits passed for every seed and fraction; see completed results below.
 
 CPU preflight `2110294` passed the initial 22 tests and actual ligand feature
 pipelines. Analysis validation `2110476` passed two additional geometry tests,
@@ -252,7 +251,7 @@ The submission record is `logs/rfd3_ligand_codiffusion_submission_2110506.txt`:
 | Seeds 102–110 | 2110508 | Nine independent GPU tasks; requires successful pilot analysis |
 | Full analysis | 2110509 | All 210 pairs and paired fixed-baseline comparisons |
 
-These jobs have been submitted; scientific GPU results are pending. The earlier
+All listed jobs completed successfully, including all 420 structures and final analysis. The earlier
 pilot `2110351` was canceled while queued before producing data to include the
 final native-noise reuse refinement. Do not submit this sweep again. Recover
 individual failed stages only after inspecting their logs and immutable config.
@@ -271,7 +270,79 @@ After each successful stage, sync its outputs with:
 scripts/sync_corehpc_job_outputs.sh --output-subdir foundry/rfd3_system_early_cut JOBID
 ```
 
-Also sync root-level `resolved_config.json` and `manifest.{json,csv}` once created.
+Root-level `resolved_config.json` and `manifest.{json,csv}` have also been synced.
 No new software, checkpoints or container images are required. Versioned
 job/launcher copies live in the experiment's `project/` bundle; preserve both
 this sweep and the fixed-ligand baseline when archiving scientific data.
+
+
+## Completed co-diffusion results
+
+All ten GPU seed tasks completed successfully (about 18–19 minutes per seed),
+followed by final analysis `2110509` in 46 seconds. All 21 fractions and ten
+seeds are present: **210 pairs, 420 native structures, 42,000 paired states**.
+All structures and 19 PNG/PDF plot pairs are synced to Wynton, together with
+the immutable root manifests and configuration. Every indexed CIF exists locally.
+
+Protein initialization and all applied churn increments matched exactly between
+tracks, across release conditions, and against the fixed-ligand experiment.
+Mapped ligand initialization/churn also matched, and both protein and mapped
+ligand coordinates remained identical throughout the coupled prefix. The fully
+coupled endpoint has exactly zero common-frame CA and mapped-ligand RMSD.
+
+Selected endpoint measurements follow. RMSDs are mean ± sample SD over ten
+matched seeds; other fractions and full valid-count/SD columns are in the CSVs.
+CA RMSD measures corresponding atoms between the two tracks after proper rigid
+alignment. Ligand CA-fit RMSD uses that protein alignment without fitting the
+ligand again. Fraction means the fraction of updates kept coupled, not the
+fraction of initial sigma.
+
+| Fraction coupled | Release sigma (Å) | Co-diffused aligned CA RMSD (Å) | Fixed aligned CA RMSD (Å) | CA-fit ligand RMSD (Å) | Secondary-label agreement | Contact Jaccard |
+| --- | --- | --- | --- | --- | --- | --- |
+| 0.00 | 2560.000 | 8.983 ± 5.005 | 5.445 ± 3.372 | 11.581 ± 6.156 | 0.531 | 0.183 |
+| 0.20 | 724.875 | 8.823 ± 4.856 | 5.521 ± 3.516 | 11.701 ± 5.077 | 0.610 | 0.156 |
+| 0.40 | 148.614 | 7.764 ± 4.838 | 5.671 ± 3.540 | 10.915 ± 6.690 | 0.658 | 0.232 |
+| 0.50 | 57.421 | 6.904 ± 5.278 | 4.929 ± 2.923 | 9.220 ± 5.111 | 0.651 | 0.352 |
+| 0.55 | 33.840 | 2.838 ± 2.207 | 2.903 ± 2.495 | 6.670 ± 5.003 | 0.853 | 0.541 |
+| 0.60 | 19.100 | 1.808 ± 1.202 | 1.971 ± 0.744 | 4.868 ± 3.039 | 0.923 | 0.661 |
+| 0.65 | 10.245 | 0.936 ± 0.609 | 1.191 ± 0.826 | 3.761 ± 2.491 | 0.948 | 0.817 |
+| 0.70 | 5.170 | 0.272 ± 0.167 | 0.289 ± 0.098 | 3.194 ± 1.867 | 0.983 | 0.949 |
+| 0.75 | 2.423 | 0.100 ± 0.033 | 0.150 ± 0.056 | 1.588 ± 0.933 | 0.993 | 0.968 |
+| 0.80 | 1.036 | 0.026 ± 0.009 | 0.031 ± 0.014 | 0.257 ± 0.183 | 1.000 | 0.991 |
+| 1.00 | never released | 0.000 ± 0.000 | 0.000 ± 0.000 | 0.000 ± 0.000 | 1.000 | 1.000 |
+
+With release at 0–50% of updates, the co-diffused experiment has larger mean
+backbone divergence than the fixed-ligand baseline, with substantial seed-to-seed
+variation. The main transition remains around 55–70% coupling (release sigma
+about 34–5 Å). At 70%, mean aligned CA RMSD is 0.272 Å versus 0.289 Å with fixed
+ligands. Secondary labels agree at 98.3% of positions and the mean long-range
+CA contact Jaccard is 0.949. At 80%, CA RMSD is 0.026 Å and labels agree at 100%.
+These CA geometry/contact metrics are proxies for shared topology.
+
+Ligand poses remain more flexible after release than the backbones: at 70%,
+mapped ligand RMSD after the protein fit averages 3.194 Å, while ligand-only
+fitting reduces it to 0.499 Å. Thus much of the ligand difference is pose,
+not just internal deformation. The final whole-ligand bond-length RMSE versus
+the input conformer averages 0.042 Å (Ac) and 0.046 Å (Bu); the largest individual
+bond-length deviation is 0.181 Å. These compare with the supplied conformer,
+not an ideal geometry or a full chemical-quality validation.
+
+Geometry flags were retained without filtering: 131/420 structures have at
+least one protein–ligand heavy-atom clash (vdW overlap >0.4 Å), compared with
+353/420 in the fixed-ligand baseline. Seven have a CA-spacing flag, versus eleven
+previously. Every design has at least one protein residue within 4 Å of the
+ligand (mean about 7.5/7.6 contacted residues for Ac/Bu). Fewer clashes alone do
+not establish binding quality. This comparison changes ligand mobility and
+mapped-atom coupling together, and native per-track sequences remain untied.
+
+Plots and data (PNG companions also have exportable PDFs):
+
+- [Fixed versus co-diffused endpoints and topology](../outputs/foundry/rfd3_system_early_cut/ligand_codiffusion_sweep_001/analysis_2110509/fixed_vs_codiffused_dense.png)
+- [CA trajectories versus denoising fraction, six conditions](../outputs/foundry/rfd3_system_early_cut/ligand_codiffusion_sweep_001/analysis_2110509/trajectory_fraction_sparse.png)
+- [CA trajectories versus sigma, six conditions](../outputs/foundry/rfd3_system_early_cut/ligand_codiffusion_sweep_001/analysis_2110509/trajectory_sigma_sparse.png)
+- [Mapped ligand dynamics, six conditions](../outputs/foundry/rfd3_system_early_cut/ligand_codiffusion_sweep_001/analysis_2110509/ligand_trajectory_fraction_sparse.png)
+- [Final summary, all 21 fractions](../outputs/foundry/rfd3_system_early_cut/ligand_codiffusion_sweep_001/analysis_2110509/final_summary.csv)
+- [All 420 structures and geometry flags](../outputs/foundry/rfd3_system_early_cut/ligand_codiffusion_sweep_001/analysis_2110509/designs.csv)
+
+No cleanup is required. The approximately 302 MiB experiment and lightweight
+validation artifacts are retained; no failed scientific attempts were produced.
