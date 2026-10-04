@@ -28,6 +28,9 @@ class DiffusionModule(RFD3DiffusionModule):
         self.decoder.__class__ = DifferentiableDecoder
 
     def forward_with_recycle(self, n_recycle, **kwargs):
+        # Execute every cycle under the caller's grad mode. Native recycled
+        # coordinates currently enter only discrete bins/neighborhood choices;
+        # preserving exact differentiation does not invent gradients for them.
         if not torch.is_grad_enabled():
             return super().forward_with_recycle(n_recycle, **kwargs)
         n = self.n_recycle if n_recycle is None else n_recycle

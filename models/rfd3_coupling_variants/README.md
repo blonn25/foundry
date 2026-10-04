@@ -73,6 +73,13 @@ each complex. This follows `score=(X0-Xnoisy)/sigma^2` and preserves the correct
 descent sign under the negative EDM integration step. Fixed coordinates remain
 untouched. Integer neighbor choices and distance bins retain their native
 piecewise-constant behavior; there is no straight-through approximation.
+In the present checkpoint, recycled X reaches the next cycle only through
+bucketized distances and integer neighbor selection. Its exact cross-cycle
+derivative is therefore zero. All cycles are recomputed with gradient tracking;
+the final sequence prediction retains its continuous derivative with respect
+to the current noisy input through the encoder and decoder. The GPU audit
+checks this architectural fact explicitly and compares the overall derivative
+against FP32 finite differences.
 
 Guidance coefficients are frozen after three held-out calibration seeds.
 Targets 0.03/0.1/0.3 refer to the median maximum state correction/native-update
