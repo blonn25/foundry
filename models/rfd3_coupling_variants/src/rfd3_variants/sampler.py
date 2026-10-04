@@ -46,11 +46,13 @@ def structural_gradient(clean, feats, ca, block):
         grads = torch.autograd.grad(energy, leaves)
     lifted = []
     for x, f, c, g in zip(clean, feats, ca, grads):
-        out = torch.zeros_like(x)
-        for i, tok in enumerate(f["atom_to_token_map"][c]):
-            mask = (f["atom_to_token_map"] == tok) & ~f["is_motif_atom_with_fixed_coord"].bool()
-            out[:, mask] = g[:, i:i+1].to(out.dtype)
-        lifted.append(out)
+        # Gather residue translations once. Besides avoiding many small GPU
+        # launches, this avoids a deterministic-CUDA boolean-index broadcast bug.
+        ca_tokens=f["atom_to_token_map"][c].long()
+        atom_tokens=f["atom_to_token_map"].long()
+        positions=torch.searchsorted(ca_tokens,atom_tokens).clamp(max=len(ca_tokens)-1)
+        mask=(ca_tokens[positions]==atom_tokens) & ~f["is_motif_atom_with_fixed_coord"].bool()
+        lifted.append(g[:,positions].to(x.dtype)*mask[None,:,None])
     return lifted, float(energy.detach())
 
 

@@ -5,6 +5,12 @@ from pathlib import Path
 
 
 def main(variation="rfd3_mean_5050"):
+    import os
+    import torch
+    os.environ.setdefault("CUBLAS_WORKSPACE_CONFIG",":4096:8")
+    # Shared-seed comparisons should not acquire artificial disagreement from
+    # CUDA atom-to-token reductions. This changes no original model source.
+    torch.use_deterministic_algorithms(True)
     from hydra import compose, initialize_config_dir
     from omegaconf import OmegaConf
     import rfd3_system
