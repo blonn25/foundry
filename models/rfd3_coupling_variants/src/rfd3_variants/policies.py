@@ -55,6 +55,10 @@ def correlated(shared, a, b, rho):
 def rmsd(a, b, align=True):
     """Per-sample RMSD, using proper rotations (never reflection)."""
     a, b = a.float(), b.float()
+    if torch.equal(a,b):
+        # An SVD of identical high-sigma states can introduce roundoff that
+        # looks like small divergence. Identical coordinates have exact zero RMSD.
+        return torch.zeros(a.shape[:-2],device=a.device)
     if align:
         a, b = a-a.mean(-2, keepdim=True), b-b.mean(-2, keepdim=True)
         u, _, vh = torch.linalg.svd(a.transpose(-1, -2) @ b)

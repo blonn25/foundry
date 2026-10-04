@@ -149,7 +149,7 @@ class ExperimentalSampler(SampleDiffusionWithSuperDiffSharedChainProxy):
             selected = [o["sequence_logits_I"][:,s][:,:,aa] for o,s in zip(outs,seq)]
             temperature = schedule(cfg["temperature"],p)
             energy_js = float(js_energy(*selected,temperature)) if seq[0].numel() else 0.
-            entropy = [float(-(z.float().softmax(-1)*z.float().log_softmax(-1)).sum(-1).mean()) for z in selected]
+            entropy = [float(-(z.float().softmax(-1)*z.float().log_softmax(-1)).sum(-1).mean()) if z.numel() else None for z in selected]
             gradients = None
             energy = None
             strength = cfg["strength"]*schedule(cfg["guidance_schedule"],p)
@@ -245,6 +245,6 @@ class ExperimentalSampler(SampleDiffusionWithSuperDiffSharedChainProxy):
             peak_cuda_allocated_bytes=torch.cuda.max_memory_allocated(device) if device.type=="cuda" else None,
             shared_sequence_readout=dict(token_indices=[s.cpu().tolist() for s in seq],
                 alphabet_indices=aa.cpu().tolist(),probabilities=consensus.cpu().tolist(),
-                per_position_js=conflict.cpu().tolist(),native_argmax_agreement=float((selected[0].argmax(-1)==selected[1].argmax(-1)).float().mean())),
+                per_position_js=conflict.cpu().tolist(),native_argmax_agreement=float((selected[0].argmax(-1)==selected[1].argmax(-1)).float().mean()) if selected[0].numel() else None),
             diagnostics={},superdiff_exact=False)
         return outputs

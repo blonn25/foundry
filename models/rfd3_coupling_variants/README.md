@@ -91,7 +91,8 @@ the prepared screen supplies the calibrated nonzero values.
 Low JS does not guarantee one good sequence or physical binding. Native
 mean-logit sequence probabilities are auxiliary diagnostics. All methods are
 scored using the same four tied Caliby candidates and full local ESMFold2.
-There is no unconditional sequence branch or product-of-experts experiment.
+The native coupled sampler rejects CFG. No extra unconditional sequence branch
+or product-of-experts experiment is introduced here.
 
 ## Execution
 

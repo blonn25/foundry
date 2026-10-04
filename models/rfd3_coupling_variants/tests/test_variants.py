@@ -109,6 +109,7 @@ class Operators(unittest.TestCase):
 
     def test_rmsd_alignment(self):
         a=torch.randn(1,15,3)
+        self.assertEqual(float(rmsd(a*10000,a*10000)),0.)
         self.assertLess(float(rmsd(a,a+9)),1e-5)
         self.assertGreater(float(rmsd(a,a+9,False)),10)
 
