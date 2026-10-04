@@ -81,7 +81,7 @@ random selection from exactly the same successful pool and budget.
 runtime comparisons, trajectory-versus-progress/sigma plots, representative
 guidance/entropy diagnostics and `analysis/report.md`.
 
-After inspecting the complete screen, run `select.py` to propose at most three
+After inspecting the complete screen, run `select_finalists.py` to propose at most three
 distinct families with observed dual success at least the baseline and greater
 successful-pool diversity. If baseline diversity is undefined, it says so and
 does not claim improvement over an unmeasurable baseline. Confirm shortlisted

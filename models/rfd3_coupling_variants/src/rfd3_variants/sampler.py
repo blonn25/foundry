@@ -243,6 +243,8 @@ class ExperimentalSampler(SampleDiffusionWithSuperDiffSharedChainProxy):
             experiment=cfg,initial_A_hashes=initial_hashes,trace=trace,
             elapsed_seconds=time.monotonic()-started,
             peak_cuda_allocated_bytes=torch.cuda.max_memory_allocated(device) if device.type=="cuda" else None,
+            cuda_device_name=torch.cuda.get_device_name(device) if device.type=="cuda" else None,
+            torch_version=torch.__version__,
             shared_sequence_readout=dict(token_indices=[s.cpu().tolist() for s in seq],
                 alphabet_indices=aa.cpu().tolist(),probabilities=consensus.cpu().tolist(),
                 per_position_js=conflict.cpu().tolist(),native_argmax_agreement=float((selected[0].argmax(-1)==selected[1].argmax(-1)).float().mean()) if selected[0].numel() else None),

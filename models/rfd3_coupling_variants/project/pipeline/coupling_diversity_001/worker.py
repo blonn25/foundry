@@ -138,7 +138,7 @@ def main():
         globals()[a.stage](run,row)
         if not (parent/(a.stage+"_job.json")).exists():
             write(parent/(a.stage+"_job.json"),dict(job=os.environ.get("SLURM_JOB_ID"),seconds=time.monotonic()-start,
-                source=manifest["source_revision"],seed=row["seed"],condition=row["condition"]["id"]))
+                node=os.environ.get("SLURMD_NODENAME"),source=manifest["source_revision"],seed=row["seed"],condition=row["condition"]["id"]))
     except Exception as exc:
         write(parent/(a.stage+"_FAILED.json"),dict(error=repr(exc),job=os.environ.get("SLURM_JOB_ID")))
         raise

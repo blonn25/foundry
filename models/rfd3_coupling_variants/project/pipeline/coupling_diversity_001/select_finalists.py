@@ -1,4 +1,4 @@
-"""Evidence-based shortlist; never declare a winner from increased RMSD alone."""
+"""Evidence-based shortlist; never shadow Python's standard-library select module."""
 import argparse
 import numpy as np
 from common import *
