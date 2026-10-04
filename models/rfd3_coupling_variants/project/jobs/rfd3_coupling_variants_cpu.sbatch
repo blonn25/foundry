@@ -10,6 +10,8 @@ module purge
 module load CBI
 cd /mnt/scratch/group/CX500059_DS1/blonnquist/protein_system_design
 export OMP_NUM_THREADS=1 OPENBLAS_NUM_THREADS=1
+python pipeline/coupling_diversity_001/prepare.py --help >/dev/null
+python pipeline/coupling_diversity_001/submit.py --help >/dev/null
 scripts/foundry_exec.sh env PYTHONDONTWRITEBYTECODE=1 \
   PYTHONPATH=/project/software/foundry/models/rfd3_coupling_variants/src:/project/software/foundry/models/rfd3_system/src:/project/software/foundry/src \
   python -m unittest discover -s /project/software/foundry/models/rfd3_coupling_variants/tests -v
