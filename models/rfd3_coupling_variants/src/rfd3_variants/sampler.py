@@ -168,6 +168,7 @@ class ExperimentalSampler(SampleDiffusionWithSuperDiffSharedChainProxy):
                             # only via its exact output cotangent, not a frozen trunk.
                             gradient, = torch.autograd.grad(logits_i,leaf,
                                 grad_outputs=cotangents[i].to(logits_i.dtype))
+                        gradient = gradient.clone()
                         gradient[:,fixed[i]] = 0
                         gradients.append(gradient.detach()*sigma.square())
                     energy = energy_js

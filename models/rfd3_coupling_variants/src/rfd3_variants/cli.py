@@ -1,5 +1,6 @@
 """Named model entry points share this Hydra-compatible command dispatcher."""
 import sys
+import json
 from pathlib import Path
 
 
@@ -20,6 +21,9 @@ def main(variation="rfd3_mean_5050"):
     with initialize_config_dir(config_dir=str(config_dir),version_base="1.3"):
         cfg = compose(config_name="inference", overrides=defaults+argv)
     params = OmegaConf.to_container(cfg,resolve=True)
+    experiment_file=params.pop("experiment_file",None)
+    if experiment_file:
+        params["experiment"]=json.loads(Path(experiment_file).read_text())
     run = {k:params.pop(k) for k in ("inputs","out_dir","n_batches")}
     params.pop("_target_",None)
     Engine(variation=variation,**params).run(**run)
