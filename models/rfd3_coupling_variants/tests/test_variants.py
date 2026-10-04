@@ -42,6 +42,20 @@ def run(method="mean_5050",old=False,**overrides):
 
 
 class Operators(unittest.TestCase):
+    def test_residue_lift_preserves_partners_and_fixed_atoms(self):
+        torch.manual_seed(70)
+        clean=[torch.randn(1,8,3),torch.randn(1,8,3)]
+        f=dict(atom_to_token_map=torch.tensor([0,0,1,1,2,2,3,3]),
+            is_motif_atom_with_fixed_coord=torch.tensor([False]*5+[True,False,False]))
+        ca=[torch.tensor([4,0,2])]*2
+        gradients,e=structural_gradient(clean,[f,f],ca,1)
+        for g in gradients:
+            self.assertTrue(torch.equal(g[:,0],g[:,1]))
+            self.assertTrue(torch.equal(g[:,2],g[:,3]))
+            self.assertEqual(float(g[:,5:].abs().sum()),0.)
+        corrected=[x-.1*g for x,g in zip(clean,gradients)]
+        self.assertLess(float(distance_energy(corrected[0][:,ca[0]],corrected[1][:,ca[1]])),e)
+
     def test_matrix(self):
         rows=conditions()
         self.assertEqual(len(rows),37)

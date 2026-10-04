@@ -90,6 +90,44 @@ def validate(out,seed,full=False):
             grad,=torch.autograd.grad(objective,leaf)
         checks["sequence_gradient_finite_nonzero"]=bool(torch.isfinite(grad).all() and grad.norm()>0)
         checks["gradient_forward_equivalence"]=True
+        # Test the continuous derivative in FP32, avoiding bf16 quantization in
+        # finite differences. Integer neighborhoods and distance bins remain
+        # native piecewise-constant operations, with no straight-through rule.
+        def fp32(value):
+            if isinstance(value,torch.Tensor):return value.float() if value.is_floating_point() else value
+            if isinstance(value,dict):return {k:fp32(v) for k,v in value.items()}
+            if isinstance(value,list):return [fp32(v) for v in value]
+            return value
+        float_args=fp32(args)
+        cycles=[]
+        process=module.process_
+        def traced(**kwargs):
+            result=process(**kwargs)
+            cycles.append(result["X_L"])
+            return result
+        module.process_=traced
+        with torch.enable_grad(),torch.autocast("cuda",enabled=False):
+            leaf=x.detach().float().requires_grad_(True)
+            output=original._denoise_once(X_noisy_L=leaf,**float_args)
+            logits=output["sequence_logits_I"][:,tokens][:,:,aa]
+            target=torch.flip(logits.detach(),[-1])
+            objective=js_energy(logits,target)
+            derivatives=torch.autograd.grad(objective,[leaf]+cycles[:-1],allow_unused=True)
+            checks["every_continuous_recycle_has_gradient"]=len(cycles)==original.n_recycle and all(
+                g is not None and torch.isfinite(g).all() and g.norm()>0 for g in derivatives)
+            gradient=derivatives[0];direction=gradient/gradient.norm()
+        module.process_=process
+        errors=[]
+        with torch.no_grad(),torch.autocast("cuda",enabled=False):
+            for epsilon in (.001,.01):
+                energies=[]
+                for sign in (-1,1):
+                    pred=original._denoise_once(X_noisy_L=leaf+sign*epsilon*direction,**float_args)
+                    energies.append(js_energy(pred["sequence_logits_I"][:,tokens][:,:,aa],target))
+                fd=(energies[1]-energies[0])/(2*epsilon)
+                errors.append(float(abs(fd-gradient.norm())/gradient.norm()))
+        print("SEQUENCE finite difference relative errors",errors,flush=True)
+        checks["sequence_gradient_finite_difference"]=min(errors)<.05
         guided=sample("sequence_coupling",strength=.1)
         checks["sequence_guided_rollout"]=bool(torch.isfinite(guided["track_1"]["X_L"]).all())
         soft=sample("soft_guidance",strength=1.)

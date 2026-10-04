@@ -48,11 +48,11 @@ def structural_gradient(clean, feats, ca, block):
     for x, f, c, g in zip(clean, feats, ca, grads):
         # Gather residue translations once. Besides avoiding many small GPU
         # launches, this avoids a deterministic-CUDA boolean-index broadcast bug.
-        ca_tokens=f["atom_to_token_map"][c].long()
+        ca_tokens,order=torch.sort(f["atom_to_token_map"][c].long())
         atom_tokens=f["atom_to_token_map"].long()
         positions=torch.searchsorted(ca_tokens,atom_tokens).clamp(max=len(ca_tokens)-1)
         mask=(ca_tokens[positions]==atom_tokens) & ~f["is_motif_atom_with_fixed_coord"].bool()
-        lifted.append(g[:,positions].to(x.dtype)*mask[None,:,None])
+        lifted.append(g[:,order[positions]].to(x.dtype)*mask[None,:,None])
     return lifted, float(energy.detach())
 
 
@@ -113,6 +113,8 @@ class ExperimentalSampler(SampleDiffusionWithSuperDiffSharedChainProxy):
         trace.append(state(0,sigmas[0]))
         aa = canonical_indices(device)
         started = time.monotonic()
+        if device.type=="cuda":
+            torch.cuda.reset_peak_memory_stats(device)
         def predict(i, coords, sigma, step):
             return self._denoise_once(X_noisy_L=coords, t_hat=sigma, D=1,
                 f=feats[i], diffusion_module=diffusion_module,
@@ -202,13 +204,19 @@ class ExperimentalSampler(SampleDiffusionWithSuperDiffSharedChainProxy):
                     raise FloatingPointError(f"nonfinite state at update {step}, track {i}")
                 if not torch.equal(next_x[i][:,fixed[i]],x[i][:,fixed[i]]):
                     raise AssertionError("fixed coordinates changed")
+            total_correction_ratios=[float((v-(z+u))[:,ix].float().norm()/u[:,ix].float().norm().clamp_min(1e-12))
+                for v,z,u,ix in zip(next_x,noisy,native_update,idx)]
+            vectors=[d[:,ix].float().flatten() for d,ix in zip(native_delta,idx)]
+            direction_cosine=float(torch.nn.functional.cosine_similarity(vectors[0],vectors[1],dim=0))
             x = [v.detach() for v in next_x]
             row = state(step+1,following) | dict(progress=p,sigma_hat=float(sigma),
                 structural_coupling=active,alpha=alpha,noise_correlation=rho,
                 churn_active=bool(gamma),churn_A_hashes=[digest(e[:,ix]) for e,ix in zip(eps,idx)],
+                base_shared_noise_hash=digest(shared),
                 js=energy_js,sequence_entropy=entropy,temperature=temperature,
                 strength=strength,energy=energy,unit_correction_ratios=unit_ratios,
                 raw_correction_ratios=raw_ratios,cap_factor=cap,
+                total_A_correction_ratios=total_correction_ratios,native_A_direction_cosine=direction_cosine,
                 native_update_norms=[float(u[:,m].float().norm()) for u,m in zip(native_update,masks)],
                 clean_ca_rmsd=float(rmsd(clean[0][:,ca[0]],clean[1][:,ca[1]])),
                 corrected_clean_ca_rmsd=float(rmsd(corrected[0][:,ca[0]],corrected[1][:,ca[1]])))
@@ -227,11 +235,16 @@ class ExperimentalSampler(SampleDiffusionWithSuperDiffSharedChainProxy):
             outputs[f"track_{i+1}"] = trajectory[i] | dict(X_L=x[i],
                 sequence_logits_I=outs[i]["sequence_logits_I"],sequence_indices_I=outs[i]["sequence_indices_I"])
         consensus = (0.5*selected[0].float()+0.5*selected[1].float()).softmax(-1)
+        logs=[z.float().log_softmax(-1) for z in selected]
+        log_mean=torch.logaddexp(*logs)-torch.log(torch.tensor(2.,device=device))
+        conflict=.5*sum((z.exp()*(z-log_mean)).sum(-1) for z in logs)
         outputs["coupling_metadata"] = coupling_metadata | dict(
             implementation="isolated coupling policy; original EDM direction and noise schedule",
             experiment=cfg,initial_A_hashes=initial_hashes,trace=trace,
             elapsed_seconds=time.monotonic()-started,
+            peak_cuda_allocated_bytes=torch.cuda.max_memory_allocated(device) if device.type=="cuda" else None,
             shared_sequence_readout=dict(token_indices=[s.cpu().tolist() for s in seq],
-                alphabet_indices=aa.cpu().tolist(),probabilities=consensus.cpu().tolist()),
+                alphabet_indices=aa.cpu().tolist(),probabilities=consensus.cpu().tolist(),
+                per_position_js=conflict.cpu().tolist(),native_argmax_agreement=float((selected[0].argmax(-1)==selected[1].argmax(-1)).float().mean())),
             diagnostics={},superdiff_exact=False)
         return outputs
