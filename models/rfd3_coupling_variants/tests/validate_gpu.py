@@ -39,11 +39,15 @@ def validate(out,seed,full=False):
     native=original.sample_coupled_superdiff_proxy
     checks={}
     def compare(one,two):
-        return all(torch.equal(one[key]["X_L"],two[key]["X_L"]) for key in ("track_1","track_2"))
+        differences=[float((one[key]["X_L"]-two[key]["X_L"]).abs().max()) for key in ("track_1","track_2")]
+        print("PARITY maximum absolute coordinate differences",differences,flush=True)
+        return all(v==0 for v in differences)
     def wrapped(**kw):
         cpu=torch.get_rng_state(); cuda=torch.cuda.get_rng_state()
         reference=native(**kw)
         ending=torch.cuda.get_rng_state()
+        torch.set_rng_state(cpu);torch.cuda.set_rng_state(cuda)
+        checks["native_repeat_exact"]=compare(reference,native(**kw))
         experimental=ExperimentalSampler.__new__(ExperimentalSampler)
         experimental.__dict__.update({k:v for k,v in original.__dict__.items() if not callable(v)})
         def sample(method,**config):
@@ -53,6 +57,8 @@ def validate(out,seed,full=False):
         mean=sample("mean_5050")
         checks["exact_native_state_parity"]=compare(reference,mean)
         checks["exact_native_rng_parity"]=torch.equal(ending,torch.cuda.get_rng_state())
+        out.mkdir(parents=True,exist_ok=True)
+        (out/"parity.json").write_text(json.dumps(checks,indent=2))
         if full:
             assert all(checks.values()),checks
             return reference
@@ -96,6 +102,9 @@ def validate(out,seed,full=False):
 
 
 if __name__=="__main__":
+    # Deterministic reductions distinguish implementation parity from CUDA
+    # atomic accumulation order. The environment sets deterministic cuBLAS too.
+    torch.use_deterministic_algorithms(True)
     p=argparse.ArgumentParser();p.add_argument("out");a=p.parse_args()
     out=Path(a.out);out.mkdir(parents=True,exist_ok=False)
     checks={}
