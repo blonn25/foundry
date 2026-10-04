@@ -1,0 +1,1 @@
+"""Independently runnable uncoupled variation."""
