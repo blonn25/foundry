@@ -20,18 +20,26 @@ def plot(run):
     manifest=load(run/"manifest.json");out=run/"analysis/plots";out.mkdir(exist_ok=True)
     valid=[s for s in stats if s["complete"]]
     colors=plt.get_cmap("tab20")
+    pareto={}
     for scope in ("all","successful"):
         fig,ax=plt.subplots(figsize=(9,6))
+        points=[]
         for i,s in enumerate(valid):
             d=diversity[s["condition"]]
             ys=[d["states"][st][scope]["TM_mean"] for st in ("AB","AC")]
             if any(y is None for y in ys):continue
             y=min(1-v for v in ys)
+            points.append(dict(condition=s["condition"],success=s["dual_success_rate"],diversity=y))
             ax.scatter(s["dual_success_rate"],y,color=colors(i%20),marker="*" if s["condition"]=="mean_5050" else "o")
             ax.annotate(s["condition"],(s["dual_success_rate"],y),fontsize=6,xytext=(3,3),textcoords="offset points")
+        frontier=[p for p in points if not any(q["success"]>=p["success"] and q["diversity"]>=p["diversity"]
+            and (q["success"]>p["success"] or q["diversity"]>p["diversity"]) for q in points)]
+        frontier.sort(key=lambda p:p["success"]);pareto[scope]=frontier
+        if frontier:ax.plot([p["success"] for p in frontier],[p["diversity"] for p in frontier],"k--",lw=.8,alpha=.6)
         ax.set(xlabel="Dual-state backbone success rate",ylabel=f"Minimum state diversity (1 − mean TM-score), {scope}",
                title="Compatibility–diversity comparison")
         ax.grid(alpha=.2);save(fig,out,"frontier_"+scope)
+    write(run/"analysis/pareto.json",pareto)
     fig,axs=plt.subplots(1,2,figsize=(12,max(3,len(valid)*.23)),sharey=True)
     y=np.arange(len(valid))
     for ax,state in zip(axs,("AB","AC")):

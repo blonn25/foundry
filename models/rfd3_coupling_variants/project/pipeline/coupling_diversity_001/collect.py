@@ -98,6 +98,7 @@ def collect(run,allow_incomplete=False):
     write(summary/"errors.json",errors);write(summary/"parents.json",parents);write(summary/"candidates.json",candidates)
     csv_write(summary/"parents.csv",parents);csv_write(summary/"candidates.csv",candidates)
     by_condition=[]
+    reference={p["seed"]:p for p in parents if p["condition"]=="mean_5050"}
     for config in manifest["conditions"]:
         ps=[p for p in parents if p["condition"]==config["id"]]
         cs=[c for c in candidates if c["condition"]==config["id"]]
@@ -112,6 +113,13 @@ def collect(run,allow_incomplete=False):
         for key in ("A_ca_rmsd","A_backbone_rmsd","secondary_structure_agreement","rfd_seconds","fold_seconds"):
             s[key+"_mean"]=float(np.mean([p[key] for p in ps])) if ps else None
             s[key+"_median"]=float(np.median([p[key] for p in ps])) if ps else None
+        matched=[p for p in ps if p["seed"] in reference]
+        if matched:
+            differences=np.array([int(p["dual_pass"])-int(reference[p["seed"]]["dual_pass"]) for p in matched])
+            rng=np.random.default_rng(seed("paired_bootstrap",config["id"]))
+            bootstrap=rng.choice(differences,(2000,len(differences)),replace=True).mean(1)
+            s["paired_dual_rate_difference"]=float(differences.mean())
+            s["paired_dual_rate_difference_ci"]=np.quantile(bootstrap,[.025,.975]).tolist()
         by_condition.append(s)
     write(summary/"conditions.json",by_condition);csv_write(summary/"conditions.csv",by_condition)
     if errors and not allow_incomplete:raise RuntimeError(f"{len(errors)} incomplete/invalid pairs; see errors.json")
